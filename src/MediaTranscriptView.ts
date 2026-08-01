@@ -92,7 +92,7 @@ export class MediaTranscriptView extends FileView {
 
   private buildSpeedControl(container: HTMLElement) {
     const row = container.createDiv('mt-speed-row');
-    row.createSpan('mt-speed-label').setText('倍速');
+    row.createSpan('mt-speed-label').setText('Speed');
     const sel = row.createEl('select', { cls: 'mt-speed' });
     for (const r of [0.75, 1, 1.25, 1.5, 2]) {
       const opt = sel.createEl('option', { text: `${r}x`, attr: { value: String(r) } });
@@ -162,7 +162,7 @@ export class MediaTranscriptView extends FileView {
   private buildToolbar(toolbar: HTMLElement, file: TFile) {
     // Subtitle source selector
     const selectWrap = toolbar.createDiv('mt-select-wrap');
-    selectWrap.createEl('label', { text: '字幕：', cls: 'mt-label' });
+    selectWrap.createEl('label', { text: 'Subtitle:', cls: 'mt-label' });
     this.trackSelect = selectWrap.createEl('select', { cls: 'mt-select' });
     this.trackSelect.addEventListener('change', async () => {
       const track = this.subtitleTracks.find(
@@ -175,9 +175,9 @@ export class MediaTranscriptView extends FileView {
 
     // Export as markdown button
     const exportBtn = actions.createEl('button', {
-      text: '导出 MD',
+      text: 'Export MD',
       cls: 'mt-btn',
-      attr: { title: '将当前字幕导出为 Markdown 笔记' },
+      attr: { title: 'Export the current transcript as a Markdown note' },
     });
     exportBtn.addEventListener('click', () => this.exportAsMarkdown(file));
   }
@@ -187,7 +187,7 @@ export class MediaTranscriptView extends FileView {
     this.trackSelect.empty();
 
     if (tracks.length === 0) {
-      const opt = this.trackSelect.createEl('option', { text: '（无字幕文件）' });
+      const opt = this.trackSelect.createEl('option', { text: '(no subtitles)' });
       opt.disabled = true;
       return;
     }
@@ -216,14 +216,14 @@ export class MediaTranscriptView extends FileView {
     try {
       content = await this.app.vault.read(track.file);
     } catch (e) {
-      this.showError(`无法读取字幕文件：${e.message}`);
+      this.showError(`Cannot read subtitle file: ${e.message}`);
       return;
     }
 
     this.segments = parseSubtitle(content, track.extension);
 
     if (this.segments.length === 0) {
-      this.showEmpty('字幕文件为空或无法解析');
+      this.showEmpty('Subtitle file is empty or could not be parsed.');
       return;
     }
 
@@ -252,7 +252,7 @@ export class MediaTranscriptView extends FileView {
       // Timestamp chip doubles as "copy timestamp" (click it) — no extra button.
       const ts = el.createDiv('mt-ts');
       ts.setText(formatTime(seg.startTime));
-      ts.setAttribute('title', '复制时间戳');
+      ts.setAttribute('title', 'Copy timestamp');
       ts.addEventListener('click', (e: MouseEvent) => {
         e.stopPropagation();
         navigator.clipboard.writeText(formatTime(seg.startTime));
@@ -285,7 +285,7 @@ export class MediaTranscriptView extends FileView {
         const menu = new Menu();
         menu.addItem(item =>
           item
-            .setTitle('从此处播放')
+            .setTitle('Play from here')
             .setIcon('play')
             .onClick(() => {
               if (this.mediaEl) {
@@ -296,13 +296,13 @@ export class MediaTranscriptView extends FileView {
         );
         menu.addItem(item =>
           item
-            .setTitle('复制时间戳')
+            .setTitle('Copy timestamp')
             .setIcon('clock')
             .onClick(() => navigator.clipboard.writeText(formatTime(seg.startTime))),
         );
         menu.addItem(item =>
           item
-            .setTitle('复制文字')
+            .setTitle('Copy text')
             .setIcon('copy')
             .onClick(() => navigator.clipboard.writeText(seg.text)),
         );
@@ -348,7 +348,7 @@ export class MediaTranscriptView extends FileView {
 
   private async exportAsMarkdown(file: TFile) {
     if (this.segments.length === 0) {
-      new Notice('没有可导出的字幕内容');
+      new Notice('Nothing to export.');
       return;
     }
 
@@ -374,15 +374,15 @@ export class MediaTranscriptView extends FileView {
       } else {
         await this.app.vault.create(mdPath, mdContent);
       }
-      new Notice(`已导出到 ${mdPath}`);
+      new Notice(`Exported to ${mdPath}`);
     } catch (e) {
-      new Notice(`导出失败：${e.message}`);
+      new Notice(`Export failed: ${e.message}`);
     }
   }
 
   // ─── Helpers ──────────────────────────────────────────────────────────────
 
-  private showEmpty(msg = '未找到字幕文件。\n请在同目录放置同名的 .json / .srt / .vtt 字幕。') {
+  private showEmpty(msg = 'No subtitle found.\nPlace a same-named .json / .srt / .vtt file in the same folder.') {
     if (!this.transcriptEl) return;
     this.transcriptEl.empty();
     const el = this.transcriptEl.createDiv('mt-empty');

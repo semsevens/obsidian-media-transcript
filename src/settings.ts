@@ -16,12 +16,12 @@ export interface MediaTranscriptSettings {
   supportedAudioExtensions: string[];
 
   // ── Layout ───────────────────────────────────────────────────────────────
-  playerWidthPercent: number; // video 左侧播放器宽度(%)，拖动分隔线后记住
+  playerWidthPercent: number; // video: left player width (%), remembered after dragging the divider
 }
 
 export const DEFAULT_SETTINGS: MediaTranscriptSettings = {
   subtitleDirectory: '',
-  priorities: [{ marker: '', label: '默认（无标记）' }],
+  priorities: [{ marker: '', label: 'Default (no marker)' }],
   supportedVideoExtensions: ['mp4', 'webm', 'mkv', 'mov', 'avi', 'm4v'],
   supportedAudioExtensions: ['mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac', 'opus'],
   playerWidthPercent: 48,
@@ -40,16 +40,15 @@ export class MediaTranscriptSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl('h2', { text: 'Media Transcript' });
 
-    // ── Subtitle ────────────────────────────────────────────────────────────
-    containerEl.createEl('h3', { text: '字幕文件' });
+    // Obsidian shows the plugin name as the heading automatically.
+    new Setting(containerEl).setName('Subtitles').setHeading();
 
     new Setting(containerEl)
-      .setName('字幕目录')
-      .setDesc('留空 = 与媒体文件同目录（默认读取同目录下的同名 .json / .srt / .vtt）')
+      .setName('Subtitle folder')
+      .setDesc("Leave empty to use each media file's own folder (reads a same-named .json / .srt / .vtt).")
       .addText(t =>
-        t.setPlaceholder('留空 = 与媒体文件同目录')
+        t.setPlaceholder("Empty = media file's folder")
           .setValue(this.plugin.settings.subtitleDirectory)
           .onChange(async v => {
             this.plugin.settings.subtitleDirectory = v.trim();
@@ -58,14 +57,14 @@ export class MediaTranscriptSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName('字幕优先级')
-      .setDesc('文件名 [xx] 标记的优先顺序，逗号分隔（空值 = 无标记，如 video.srt）')
+      .setName('Subtitle priority')
+      .setDesc('Order of filename [marker] tags, comma-separated (empty = no marker, e.g. video.srt).')
       .addText(t =>
         t.setPlaceholder('vibevoice-4bit, whisper,')
           .setValue(this.plugin.settings.priorities.map(p => p.marker).join(', '))
           .onChange(async v => {
             const markers = v.split(',').map(s => s.trim()).filter((m, i, a) => a.indexOf(m) === i);
-            this.plugin.settings.priorities = markers.map(m => ({ marker: m, label: m || '默认' }));
+            this.plugin.settings.priorities = markers.map(m => ({ marker: m, label: m || 'Default' }));
             await this.plugin.saveSettings();
           }),
       );
