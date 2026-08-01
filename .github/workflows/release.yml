@@ -1,0 +1,55 @@
+name: Release
+
+# Obsidian's plugin registry checks GitHub Releases by tag name and expects
+# the tag to equal manifest.json's `version` field — NO leading "v". So:
+#   ✓ 1.0.0
+#   ✗ v1.0.0
+on:
+  push:
+    tags:
+      - "*.*.*"
+
+permissions:
+  contents: write # create the release and upload assets
+
+jobs:
+  release:
+    name: build + publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify tag matches manifest.json version
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          mver=$(node -p "require('./manifest.json').version")
+          if [ "$tag" != "$mver" ]; then
+            echo "::error::Tag '$tag' does not match manifest.json version '$mver'."
+            echo "::error::Bump manifest.json (and package.json / versions.json) first, then re-tag."
+            exit 1
+          fi
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            main.js manifest.json styles.css

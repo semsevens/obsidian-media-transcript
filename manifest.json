@@ -1,0 +1,10 @@
+{
+  "id": "obsidian-media-transcript",
+  "name": "Media Transcript",
+  "version": "1.0.0",
+  "minAppVersion": "1.4.0",
+  "description": "Play video/audio with synchronized, clickable transcripts. Click any line to seek; playing line auto-highlights.",
+  "author": "semsevens",
+  "authorUrl": "https://github.com/semsevens",
+  "isDesktopOnly": true
+}
