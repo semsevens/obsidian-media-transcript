@@ -41,8 +41,7 @@ export class MediaTranscriptView extends FileView {
       const root = this.contentEl.createDiv('mt-root');
       const playerSide = root.createDiv('mt-player-side');
       const pct = this.plugin.settings.playerWidthPercent ?? 48;
-      playerSide.style.width = `${pct}%`;
-      playerSide.style.maxWidth = 'none';
+      playerSide.setCssProps({ '--mt-player-width': `${pct}%` });
       this.buildDivider(root, playerSide);
       const transcriptSide = root.createDiv('mt-transcript-side');
       this.buildVideoPlayer(playerSide, file);
@@ -115,9 +114,9 @@ export class MediaTranscriptView extends FileView {
       let pct = ((e.clientX - rect.left) / rect.width) * 100;
       pct = Math.max(20, Math.min(75, pct));
       pending = pct;
-      playerSide.style.width = `${pct}%`;
+      playerSide.setCssProps({ '--mt-player-width': `${pct}%` });
     };
-    const onUp = async () => {
+    const onUp = () => {
       if (!dragging) return;
       dragging = false;
       document.body.removeClass('mt-resizing');
@@ -125,7 +124,7 @@ export class MediaTranscriptView extends FileView {
       document.removeEventListener('mouseup', onUp);
       if (pending >= 0) {
         this.plugin.settings.playerWidthPercent = Math.round(pending);
-        await this.plugin.saveSettings();
+        void this.plugin.saveSettings();
       }
     };
     divider.addEventListener('mousedown', (e: MouseEvent) => {
@@ -164,11 +163,11 @@ export class MediaTranscriptView extends FileView {
     const selectWrap = toolbar.createDiv('mt-select-wrap');
     selectWrap.createEl('label', { text: 'Subtitle:', cls: 'mt-label' });
     this.trackSelect = selectWrap.createEl('select', { cls: 'mt-select' });
-    this.trackSelect.addEventListener('change', async () => {
+    this.trackSelect.addEventListener('change', () => {
       const track = this.subtitleTracks.find(
-        t => t.file.path === this.trackSelect!.value,
+        t => t.file.path === this.trackSelect?.value,
       );
-      if (track) await this.loadTrack(track);
+      if (track) void this.loadTrack(track);
     });
 
     const actions = toolbar.createDiv('mt-actions');
@@ -255,7 +254,7 @@ export class MediaTranscriptView extends FileView {
       ts.setAttribute('title', 'Copy timestamp');
       ts.addEventListener('click', (e: MouseEvent) => {
         e.stopPropagation();
-        navigator.clipboard.writeText(formatTime(seg.startTime));
+        void navigator.clipboard.writeText(formatTime(seg.startTime));
       });
 
       // Speaker prefix chip — only when multiple speakers, distinct color each.
@@ -265,8 +264,10 @@ export class MediaTranscriptView extends FileView {
         const spk = el.createDiv('mt-spk');
         spk.setText(isNum ? `S${n}` : String(seg.speaker));
         const hue = ((isNum ? n : 0) * 70) % 360;
-        spk.style.color = `hsl(${hue}, 55%, 50%)`;
-        spk.style.background = `hsl(${hue}, 55%, 50%, 0.14)`;
+        spk.setCssStyles({
+          color: `hsl(${hue}, 55%, 50%)`,
+          backgroundColor: `hsla(${hue}, 55%, 50%, 0.14)`,
+        });
       }
 
       const txt = el.createDiv('mt-txt');
@@ -298,13 +299,13 @@ export class MediaTranscriptView extends FileView {
           item
             .setTitle('Copy timestamp')
             .setIcon('clock')
-            .onClick(() => navigator.clipboard.writeText(formatTime(seg.startTime))),
+            .onClick(() => { void navigator.clipboard.writeText(formatTime(seg.startTime)); }),
         );
         menu.addItem(item =>
           item
             .setTitle('Copy text')
             .setIcon('copy')
-            .onClick(() => navigator.clipboard.writeText(seg.text)),
+            .onClick(() => { void navigator.clipboard.writeText(seg.text); }),
         );
         menu.showAtMouseEvent(e);
       });

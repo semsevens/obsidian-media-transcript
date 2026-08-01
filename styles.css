@@ -22,9 +22,9 @@
 .mt-player-side {
   display: flex;
   flex-direction: column;
-  width: 48%;
+  width: var(--mt-player-width, 48%);
   min-width: 300px;
-  max-width: 62%;
+  max-width: 75%;
   flex-shrink: 0;
   background: var(--background-secondary);
   overflow-y: auto;
@@ -142,8 +142,8 @@ video.mt-media {
     display: none;
   }
   .mt-player-side {
-    width: 100% !important;
-    max-width: none !important;
+    width: 100%;
+    max-width: none;
     min-width: 0;
     border-bottom: 1px solid var(--background-modifier-border);
   }

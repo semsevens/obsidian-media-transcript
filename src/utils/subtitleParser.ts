@@ -93,34 +93,46 @@ export function parseVTT(content: string): SubtitleSegment[] {
   return segments;
 }
 
+interface RawSegment {
+  start?: unknown;
+  end?: unknown;
+  startTime?: unknown;
+  endTime?: unknown;
+  text?: unknown;
+  content?: unknown;
+  speaker?: unknown;
+  speaker_id?: unknown;
+}
+
+function toSegment(seg: RawSegment, i: number): SubtitleSegment {
+  const speaker = seg.speaker ?? seg.speaker_id;
+  return {
+    index: i + 1,
+    startTime: Number(seg.start ?? seg.startTime ?? 0),
+    endTime: Number(seg.end ?? seg.endTime ?? 0),
+    text: String(seg.text ?? seg.content ?? '').trim(),
+    speaker: typeof speaker === 'string' || typeof speaker === 'number' ? speaker : undefined,
+  };
+}
+
 export function parseJSON(content: string): SubtitleSegment[] {
+  let data: unknown;
   try {
-    const data = JSON.parse(content);
-
-    // Whisper verbose_json / local-asr format: { segments: [...] }
-    if (data.segments && Array.isArray(data.segments)) {
-      return data.segments.map((seg: any, i: number) => ({
-        index: i + 1,
-        startTime: Number(seg.start),
-        endTime: Number(seg.end),
-        text: String(seg.text).trim(),
-        speaker: seg.speaker ?? seg.speaker_id,
-      }));
-    }
-
-    // Plain array format: [{start, end, text}]
-    if (Array.isArray(data)) {
-      return data.map((seg: any, i: number) => ({
-        index: i + 1,
-        startTime: Number(seg.start ?? seg.startTime ?? 0),
-        endTime: Number(seg.end ?? seg.endTime ?? 0),
-        text: String(seg.text ?? seg.content ?? '').trim(),
-        speaker: seg.speaker ?? seg.speaker_id,
-      }));
-    }
+    data = JSON.parse(content);
   } catch {
-    // malformed JSON — fall through to return []
+    return [];
   }
+
+  // Whisper verbose_json / local-asr format: { segments: [...] }
+  if (data && typeof data === 'object' && Array.isArray((data as { segments?: unknown }).segments)) {
+    return ((data as { segments: RawSegment[] }).segments).map(toSegment);
+  }
+
+  // Plain array format: [{start, end, text}]
+  if (Array.isArray(data)) {
+    return (data as RawSegment[]).map(toSegment);
+  }
+
   return [];
 }
 

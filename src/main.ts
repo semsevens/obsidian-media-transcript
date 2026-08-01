@@ -48,7 +48,7 @@ export default class MediaTranscriptPlugin extends Plugin {
             item
               .setTitle('Open in Media Transcript')
               .setIcon('play-circle')
-              .onClick(() => this.openInView(file)),
+              .onClick(() => { void this.openInView(file); }),
           );
         }
       }),
@@ -59,9 +59,9 @@ export default class MediaTranscriptPlugin extends Plugin {
       name: 'Open current media file in transcript view',
       checkCallback: (checking: boolean) => {
         const file = this.app.workspace.getActiveFile();
-        const ok = !!file && this.isMedia(file);
-        if (ok && !checking) this.openInView(file as TFile);
-        return ok;
+        if (!(file instanceof TFile) || !this.isMedia(file)) return false;
+        if (!checking) void this.openInView(file);
+        return true;
       },
     });
 
