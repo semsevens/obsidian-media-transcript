@@ -1,6 +1,12 @@
 import { FileView, WorkspaceLeaf, TFile, Notice, Menu } from 'obsidian';
 import type MediaTranscriptPlugin from './main';
-import { findSubtitleFiles, resolvePriority, FoundSubtitleFile } from './utils/subtitleFinder';
+import {
+  findSubtitleFiles,
+  findMediaForSubtitle,
+  resolvePriority,
+  FoundSubtitleFile,
+  SUBTITLE_EXTENSIONS,
+} from './utils/subtitleFinder';
 import { parseSubtitle, SubtitleSegment, formatTime } from './utils/subtitleParser';
 
 export const VIEW_TYPE_MEDIA_TRANSCRIPT = 'media-transcript-view';
@@ -20,6 +26,12 @@ export class MediaTranscriptView extends FileView {
   private activeIndex = -1;
   private subtitleTracks: FoundSubtitleFile[] = [];
   private trackSelect: HTMLSelectElement | null = null;
+  // The media file actually being played. Usually equals `this.file`, but when
+  // a subtitle file is opened directly it's the media we resolved for it.
+  private mediaFile: TFile | null = null;
+  // When opened via a subtitle file, the track to auto-select instead of the
+  // priority-sorted default (null otherwise).
+  private preferredTrackPath: string | null = null;
 
   constructor(leaf: WorkspaceLeaf, plugin: MediaTranscriptPlugin) {
     super(leaf);
@@ -27,7 +39,9 @@ export class MediaTranscriptView extends FileView {
   }
 
   getViewType() { return VIEW_TYPE_MEDIA_TRANSCRIPT; }
-  getDisplayText() { return this.file?.basename ?? 'Media Transcript'; }
+  getDisplayText() {
+    return this.mediaFile?.basename ?? this.file?.basename ?? 'Media Transcript';
+  }
 
   // ─── File lifecycle ───────────────────────────────────────────────────────
 
@@ -35,9 +49,28 @@ export class MediaTranscriptView extends FileView {
     this.contentEl.empty();
     this.contentEl.addClass('mt-view');
     this.contentEl.removeClass('mt-audio-mode');
+    this.preferredTrackPath = null;
+
+    // If a subtitle file was opened directly, resolve the media it belongs to
+    // (prefer video, else audio) and play that instead, pre-selecting this track.
+    let mediaFile = file;
+    if (SUBTITLE_EXTENSIONS.includes(file.extension.toLowerCase())) {
+      const resolved = findMediaForSubtitle(file, this.app.vault, this.plugin.settings);
+      if (!resolved) {
+        this.mediaFile = null;
+        this.contentEl.createDiv('mt-empty').setText(
+          `No media file found next to "${file.name}".\n` +
+            'Place a same-named audio/video file (e.g. .mp4 / .m4a / .mp3) in the same folder.',
+        );
+        return;
+      }
+      mediaFile = resolved;
+      this.preferredTrackPath = file.path;
+    }
+    this.mediaFile = mediaFile;
 
     const isVideo = this.plugin.settings.supportedVideoExtensions.includes(
-      file.extension.toLowerCase(),
+      mediaFile.extension.toLowerCase(),
     );
 
     if (isVideo) {
@@ -49,15 +82,15 @@ export class MediaTranscriptView extends FileView {
       playerSide.setCssProps({ '--mt-player-width': `${pct}%` });
       this.buildDivider(root, playerSide);
       const transcriptSide = root.createDiv('mt-transcript-side');
-      this.buildVideoPlayer(playerSide, file);
-      await this.buildTranscriptPanel(transcriptSide, file);
+      this.buildVideoPlayer(playerSide, mediaFile);
+      await this.buildTranscriptPanel(transcriptSide, mediaFile);
     } else {
       // Audio: nothing to watch → slim control bar on top, transcript full-width.
       this.contentEl.addClass('mt-audio-mode');
       const bar = this.contentEl.createDiv('mt-audio-bar');
-      this.buildAudioBar(bar, file);
+      this.buildAudioBar(bar, mediaFile);
       const transcriptSide = this.contentEl.createDiv('mt-transcript-side');
-      await this.buildTranscriptPanel(transcriptSide, file);
+      await this.buildTranscriptPanel(transcriptSide, mediaFile);
     }
   }
 
@@ -164,8 +197,16 @@ export class MediaTranscriptView extends FileView {
     const sorted = resolvePriority(this.subtitleTracks, this.plugin.settings.priorities);
     this.populateTrackSelect(sorted);
 
-    if (sorted.length > 0) {
-      await this.loadTrack(sorted[0]);
+    // If we arrived here from a clicked subtitle, load that exact track;
+    // otherwise fall back to the priority-sorted default.
+    const preferred = this.preferredTrackPath
+      ? sorted.find(t => t.file.path === this.preferredTrackPath)
+      : undefined;
+    const initial = preferred ?? sorted[0];
+
+    if (initial) {
+      if (this.trackSelect) this.trackSelect.value = initial.file.path;
+      await this.loadTrack(initial);
     } else {
       this.showEmpty();
     }

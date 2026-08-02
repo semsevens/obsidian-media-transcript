@@ -7,7 +7,7 @@ export interface FoundSubtitleFile {
   extension: string; // "srt" | "vtt" | "json"
 }
 
-const SUBTITLE_EXTENSIONS = ['srt', 'vtt', 'json'];
+export const SUBTITLE_EXTENSIONS = ['srt', 'vtt', 'json'];
 
 // Escape special regex characters in a string
 function escapeRegex(str: string): string {
@@ -88,6 +88,73 @@ export function resolvePriority(
   // Hint: build a Map from marker → rank index, then sort `found` by that rank.
   // Files with markers not in the list should get rank = priorities.length (i.e., last).
   return found;
+}
+
+/**
+ * Reverse lookup: given a subtitle file, find the media file it belongs to.
+ *
+ * This mirrors the naming convention used by findSubtitleFiles, but backwards:
+ *   [baseName].[ext]          (subtitle) → media basename = baseName
+ *   [baseName].[marker].[ext] (subtitle) → media basename = baseName
+ * Since the [marker] is arbitrary, we try every prefix of the subtitle's
+ * name as a candidate media basename (longest first), e.g.
+ *   "lecture.whisper.json" → candidates: "lecture.whisper", "lecture".
+ *
+ * Search directory: the subtitle file's own folder (media normally sits next
+ * to its subtitles).
+ *
+ * Preference: video before audio, then by the extension order configured in
+ * settings — so an .mp4 wins over an .m4a for the same basename.
+ * Returns null if no matching media file exists.
+ */
+export function findMediaForSubtitle(
+  subtitleFile: TFile,
+  vault: Vault,
+  settings: MediaTranscriptSettings,
+): TFile | null {
+  const dir = subtitleFile.parent?.path ?? '';
+
+  // Strip the subtitle extension, then build candidate media basenames from
+  // every dotted prefix (so an arbitrary [marker] segment is peeled off).
+  const withoutExt = subtitleFile.name.slice(
+    0,
+    subtitleFile.name.length - subtitleFile.extension.length - 1,
+  );
+  const parts = withoutExt.split('.');
+  const candidates = new Set<string>();
+  for (let k = parts.length; k >= 1; k--) {
+    candidates.add(parts.slice(0, k).join('.'));
+  }
+
+  const videoExts = settings.supportedVideoExtensions.map(e => e.toLowerCase());
+  const audioExts = settings.supportedAudioExtensions.map(e => e.toLowerCase());
+
+  // Lower rank = higher preference: all video (in configured order) before any audio.
+  const rank = (ext: string): number => {
+    const vi = videoExts.indexOf(ext);
+    if (vi >= 0) return vi;
+    const ai = audioExts.indexOf(ext);
+    return ai >= 0 ? videoExts.length + ai : Number.MAX_SAFE_INTEGER;
+  };
+
+  let best: TFile | null = null;
+  let bestRank = Number.MAX_SAFE_INTEGER;
+
+  for (const file of vault.getFiles()) {
+    if ((file.parent?.path ?? '') !== dir) continue;
+    if (!candidates.has(file.basename)) continue;
+
+    const ext = file.extension.toLowerCase();
+    if (!videoExts.includes(ext) && !audioExts.includes(ext)) continue;
+
+    const r = rank(ext);
+    if (r < bestRank) {
+      best = file;
+      bestRank = r;
+    }
+  }
+
+  return best;
 }
 
 /**

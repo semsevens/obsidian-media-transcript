@@ -1,7 +1,16 @@
-import { App, Plugin, TFile } from 'obsidian';
+import { App, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
 import { MediaTranscriptView, VIEW_TYPE_MEDIA_TRANSCRIPT } from './MediaTranscriptView';
 import { MediaTranscriptSettingTab, DEFAULT_SETTINGS } from './settings';
 import type { MediaTranscriptSettings } from './settings';
+import { SUBTITLE_EXTENSIONS } from './utils/subtitleFinder';
+
+// Subtitle extensions we globally register for click-to-open. Clicking any of
+// these opens the transcript view, which reverse-resolves the matching media
+// (video first, else audio) and plays it. `.json` is included: this reliably
+// routes every `.json` here (a non-subtitle one just shows a "no media" hint),
+// which is the tradeoff for click-to-play working every time — a conditional
+// per-file takeover isn't possible since registration is per-extension.
+const CLICKABLE_SUBTITLE_EXTS = SUBTITLE_EXTENSIONS;
 
 // Media extensions (mp3/mp4/…) are owned by Obsidian core, so `registerExtensions`
 // throws for them. To open media in our transcript view we take them over via
@@ -26,11 +35,13 @@ export default class MediaTranscriptPlugin extends Plugin {
       leaf => new MediaTranscriptView(leaf, this),
     );
 
-    for (const ext of this.mediaExts()) {
+    // Media extensions, plus subtitle extensions (.srt / .vtt / .json) so
+    // clicking a subtitle opens here and reverse-resolves its media.
+    for (const ext of [...this.mediaExts(), ...CLICKABLE_SUBTITLE_EXTS]) {
       try {
         this.registerExtensions([ext], VIEW_TYPE_MEDIA_TRANSCRIPT);
       } catch {
-        // Owned by core/another plugin — take it over so media opens here.
+        // Owned by core/another plugin — take it over so it opens here.
         try {
           viewRegistry(this.app).unregisterExtensions([ext]);
           this.registerExtensions([ext], VIEW_TYPE_MEDIA_TRANSCRIPT);
@@ -40,10 +51,12 @@ export default class MediaTranscriptPlugin extends Plugin {
       }
     }
 
-    // Explicit "open in this view" — fallback for any extension we couldn't take.
+    // Explicit "open in this view" — fallback for any extension we couldn't
+    // take (and the only entry point for .json subtitles). Works for both
+    // media files and subtitle files (which resolve to their media).
     this.registerEvent(
       this.app.workspace.on('file-menu', (menu, file) => {
-        if (file instanceof TFile && this.isMedia(file)) {
+        if (file instanceof TFile && (this.isMedia(file) || this.isSubtitle(file))) {
           menu.addItem(item =>
             item
               .setTitle('Open in Media Transcript')
@@ -59,7 +72,9 @@ export default class MediaTranscriptPlugin extends Plugin {
       name: 'Open current media file in transcript view',
       checkCallback: (checking: boolean) => {
         const file = this.app.workspace.getActiveFile();
-        if (!(file instanceof TFile) || !this.isMedia(file)) return false;
+        if (!(file instanceof TFile) || (!this.isMedia(file) && !this.isSubtitle(file))) {
+          return false;
+        }
         if (!checking) void this.openInView(file);
         return true;
       },
@@ -71,7 +86,10 @@ export default class MediaTranscriptPlugin extends Plugin {
   onunload() {
     // Release the extensions we took over (they stay registered otherwise).
     try {
-      viewRegistry(this.app).unregisterExtensions(this.mediaExts());
+      viewRegistry(this.app).unregisterExtensions([
+        ...this.mediaExts(),
+        ...CLICKABLE_SUBTITLE_EXTS,
+      ]);
     } catch {
       // ignore
     }
@@ -89,8 +107,17 @@ export default class MediaTranscriptPlugin extends Plugin {
     return this.mediaExts().includes(ext);
   }
 
+  private isSubtitle(file: TFile): boolean {
+    return SUBTITLE_EXTENSIONS.includes(file.extension.toLowerCase());
+  }
+
   private async openInView(file: TFile) {
     const leaf = this.app.workspace.getLeaf(false);
+    await this.swapLeafToView(leaf, file);
+  }
+
+  // Point an existing leaf at our transcript view for the given file.
+  private async swapLeafToView(leaf: WorkspaceLeaf, file: TFile) {
     await leaf.setViewState({
       type: VIEW_TYPE_MEDIA_TRANSCRIPT,
       state: { file: file.path },
