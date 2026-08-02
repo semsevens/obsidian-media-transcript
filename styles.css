@@ -22,7 +22,7 @@
 .mt-player-side {
   display: flex;
   flex-direction: column;
-  width: var(--mt-player-width, 48%);
+  width: var(--mt-player-width, 75%);
   min-width: 300px;
   max-width: 75%;
   flex-shrink: 0;

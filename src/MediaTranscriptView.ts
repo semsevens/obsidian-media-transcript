@@ -45,7 +45,7 @@ export class MediaTranscriptView extends FileView {
       // separated by a draggable divider (remembered width).
       const root = this.contentEl.createDiv('mt-root');
       const playerSide = root.createDiv('mt-player-side');
-      const pct = this.plugin.settings.playerWidthPercent ?? 48;
+      const pct = this.plugin.settings.playerWidthPercent ?? 75;
       playerSide.setCssProps({ '--mt-player-width': `${pct}%` });
       this.buildDivider(root, playerSide);
       const transcriptSide = root.createDiv('mt-transcript-side');
@@ -58,6 +58,14 @@ export class MediaTranscriptView extends FileView {
       this.buildAudioBar(bar, file);
       const transcriptSide = this.contentEl.createDiv('mt-transcript-side');
       await this.buildTranscriptPanel(transcriptSide, file);
+    }
+  }
+
+  /** Apply a new player-pane width (%) to this open view, if it's in video mode. */
+  applyPlayerWidth(pct: number) {
+    const playerSide = this.contentEl.querySelector('.mt-player-side');
+    if (playerSide instanceof HTMLElement) {
+      playerSide.setCssProps({ '--mt-player-width': `${pct}%` });
     }
   }
 
