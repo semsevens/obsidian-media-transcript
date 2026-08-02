@@ -5,6 +5,11 @@ import { parseSubtitle, SubtitleSegment, formatTime } from './utils/subtitlePars
 
 export const VIEW_TYPE_MEDIA_TRANSCRIPT = 'media-transcript-view';
 
+/** Extract a readable message from an unknown thrown value. */
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 export class MediaTranscriptView extends FileView {
   plugin: MediaTranscriptPlugin;
 
@@ -215,7 +220,7 @@ export class MediaTranscriptView extends FileView {
     try {
       content = await this.app.vault.read(track.file);
     } catch (e) {
-      this.showError(`Cannot read subtitle file: ${e.message}`);
+      this.showError(`Cannot read subtitle file: ${errorMessage(e)}`);
       return;
     }
 
@@ -377,7 +382,7 @@ export class MediaTranscriptView extends FileView {
       }
       new Notice(`Exported to ${mdPath}`);
     } catch (e) {
-      new Notice(`Export failed: ${e.message}`);
+      new Notice(`Export failed: ${errorMessage(e)}`);
     }
   }
 
