@@ -80,6 +80,18 @@ export default class MediaTranscriptPlugin extends Plugin {
       },
     });
 
+    // Focus the transcript search box (bind a hotkey to it if you like).
+    this.addCommand({
+      id: 'search-transcript',
+      name: 'Search transcript',
+      checkCallback: (checking: boolean) => {
+        const view = this.app.workspace.getActiveViewOfType(MediaTranscriptView);
+        if (!view) return false;
+        if (!checking) view.focusSearch();
+        return true;
+      },
+    });
+
     this.addSettingTab(new MediaTranscriptSettingTab(this.app, this));
   }
 

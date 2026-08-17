@@ -26,7 +26,8 @@ export interface MediaTranscriptSettings {
   transcriptFontSize: number; // transcript text size in px (A−/A+ buttons update this too)
 
   // ── Playback ─────────────────────────────────────────────────────────────
-  autoScroll: boolean; // keep the playing line centered in the transcript
+  autoScroll: boolean;      // keep the playing line centered in the transcript
+  videoAudioOnly: boolean;  // play videos without showing the picture
 }
 
 export const DEFAULT_SETTINGS: MediaTranscriptSettings = {
@@ -37,6 +38,7 @@ export const DEFAULT_SETTINGS: MediaTranscriptSettings = {
   playerWidthPercent: 75,
   transcriptFontSize: 15,
   autoScroll: true,
+  videoAudioOnly: false,
 };
 
 // ── Settings Tab ──────────────────────────────────────────────────────────────
@@ -136,6 +138,22 @@ export class MediaTranscriptSettingTab extends PluginSettingTab {
         t.setValue(this.plugin.settings.autoScroll).onChange(async v => {
           this.plugin.settings.autoScroll = v;
           await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName('Play videos as audio only')
+      .setDesc(
+        "Don't show the picture for video files — a slim control bar and a full-width " +
+          'transcript instead. The 🎧 / 🎬 button in the transcript toolbar toggles this per view.',
+      )
+      .addToggle(t =>
+        t.setValue(this.plugin.settings.videoAudioOnly).onChange(async v => {
+          this.plugin.settings.videoAudioOnly = v;
+          await this.plugin.saveSettings();
+          for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_MEDIA_TRANSCRIPT)) {
+            if (leaf.view instanceof MediaTranscriptView) await leaf.view.applyAudioOnly();
+          }
         }),
       );
   }

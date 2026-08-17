@@ -199,6 +199,10 @@ video.mt-media {
 .mt-actions {
   display: flex;
   gap: 6px;
+  /* A narrow transcript column (video mode) must wrap these, not clip them. */
+  flex-wrap: wrap;
+  row-gap: 4px;
+  justify-content: flex-end;
 }
 
 .mt-btn {
@@ -222,6 +226,60 @@ video.mt-media {
   padding: 3px 7px;
   min-width: 30px;
   font-variant-numeric: tabular-nums;
+}
+
+/* ── Search bar ─────────────────────────────────── */
+
+.mt-searchbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  flex-shrink: 0;
+}
+
+.mt-search-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.82em;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-normal);
+}
+
+.mt-search-count {
+  font-size: 0.74em;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 34px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.mt-search-count.mt-search-none {
+  color: var(--text-error);
+}
+
+/* ↑ / ↓ match steppers */
+.mt-btn-hit {
+  padding: 2px 7px;
+  line-height: 1.2;
+}
+
+/* Matches inside a transcript line */
+.mt-hit {
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text-accent) 26%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-accent) 30%, transparent);
+}
+
+.mt-hit-current {
+  background: var(--text-accent);
+  color: var(--text-on-accent);
+  box-shadow: none;
 }
 
 /* ── Transcript ────────────────────────────────── */

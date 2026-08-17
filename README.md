@@ -21,6 +21,13 @@ auto-highlights and scrolls into view.
   hand pauses it for a few seconds so you can read ahead; click a line to resume immediately.
 - **Adjustable transcript text size** — `A−` / `A+` in the transcript toolbar, or the slider in
   settings (10–32 px, remembered).
+- **Search the transcript** — type in the search box to highlight every match; `n/m` counter with
+  `↑` / `↓` (or `Enter` / `Shift+Enter`) to step through them, `Esc` to clear. Searching jumps
+  forward from the line currently playing, and works for CJK text. The *Search transcript*
+  command focuses the box, so you can bind a hotkey to it.
+- **Listen to a video without the picture** — the `🎧 Audio only` button swaps the video for a slim
+  audio bar and a full-width transcript, keeping playback position and speed; `🎬 Video` brings the
+  picture back. Remembered across files and sessions.
 - Right-click menu: play from here / copy timestamp / copy text; click a timestamp to copy it.
 - **Per-speaker labels** (colored `S0` / `S1` …) when a JSON transcript has 2+ speakers.
 - Export the current transcript to a Markdown note.
@@ -65,6 +72,7 @@ Place `<media-name>.<marker>.{json,srt,vtt}` next to the media, e.g. `lecture.mp
   updates it too).
 - **Transcript font size** — text size in px; the toolbar's `A−` / `A+` change the same value.
 - **Auto-scroll transcript** — keep the playing line centered while playing (on by default).
+- **Play videos as audio only** — same as the toolbar's `🎧` button, as a default for new views.
 
 If a media extension is already handled by Obsidian core or another plugin, use the
 **Open in Media Transcript** file-menu item or the *Open current media file in transcript view*

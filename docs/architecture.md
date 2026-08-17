@@ -65,6 +65,20 @@ MediaTranscriptView.onLoadFile()
   `padding-bottom: 40vh` 让最后几段也能居中）。用户 `wheel/touchmove` 手动滚动后
   暂停 4s（`MANUAL_SCROLL_GRACE_MS`），点击段落立即恢复；可用
   `settings.autoScroll` 整体关闭（关闭后仍高亮）。
+- **搜索**：工具栏下面一行 `.mt-searchbar`（输入框 + `n/m` 计数 + ↑/↓）。
+  `applySearch()` 大小写不敏感的子串匹配（CJK 同样可用），把命中段的 `.mt-txt`
+  重建成「纯文本 + `span.mt-hit`」交替结构（不用 innerHTML）；`clearHighlights()`
+  按 `highlightedSegs` 还原原文。命中列表 `hitEls` 扁平存放每一处，
+  `gotoHit()` 标 `.mt-hit-current` 并把所在段滚到居中，同时刷新
+  `manualScrollUntil` 避免播放把视图拽走。首次跳转从**当前播放段**往后找，
+  找不到就回到第一处；切轨/重渲染后会用当前关键词重跑一次。
+  命令 `search-transcript` → `focusSearch()`（可自行绑快捷键）。
+- **视频 ⇄ 纯音频**：`settings.videoAudioOnly`（工具栏 🎧/🎬 按钮 + 设置页开关）。
+  `buildLayout()` 按当前模式搭布局，`transcriptSideEl` 整列**移动复用**，
+  所以切换不重新解析字幕、不丢搜索结果和滚动位置；`rebuildPlayer()` 只换播放器，
+  把 `currentTime / playbackRate / paused` 搬过去（新元素 `readyState === 0` 时
+  推迟到 `loadedmetadata` 再 seek）。纯音频模式用 `<audio>` 播视频文件（同一套解码器），
+  万一某容器不支持会触发 `error` → Notice 提示并自动退回视频模式。
 - **交互**：左键点段落 → seek+play；右键 → 菜单（从此处播放 / 复制时间戳 / 复制文字）；
   点左侧时间块 → 复制时间戳；hover 仅高亮，不弹按钮（不影响布局）。
 - **扩展名接管**：`main.ts` 逐个 `registerExtensions`，被其他插件占用时先
