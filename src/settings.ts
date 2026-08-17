@@ -1,6 +1,11 @@
 import { App, PluginSettingTab, Setting } from 'obsidian';
 import type MediaTranscriptPlugin from './main';
-import { MediaTranscriptView, VIEW_TYPE_MEDIA_TRANSCRIPT } from './MediaTranscriptView';
+import {
+  MediaTranscriptView,
+  VIEW_TYPE_MEDIA_TRANSCRIPT,
+  MIN_FONT_SIZE,
+  MAX_FONT_SIZE,
+} from './MediaTranscriptView';
 
 export interface SubtitlePriority {
   marker: string;
@@ -18,6 +23,10 @@ export interface MediaTranscriptSettings {
 
   // ── Layout ───────────────────────────────────────────────────────────────
   playerWidthPercent: number; // video: left player width (%), remembered after dragging the divider
+  transcriptFontSize: number; // transcript text size in px (A−/A+ buttons update this too)
+
+  // ── Playback ─────────────────────────────────────────────────────────────
+  autoScroll: boolean; // keep the playing line centered in the transcript
 }
 
 export const DEFAULT_SETTINGS: MediaTranscriptSettings = {
@@ -26,6 +35,8 @@ export const DEFAULT_SETTINGS: MediaTranscriptSettings = {
   supportedVideoExtensions: ['mp4', 'webm', 'mkv', 'mov', 'avi', 'm4v'],
   supportedAudioExtensions: ['mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac', 'opus'],
   playerWidthPercent: 75,
+  transcriptFontSize: 15,
+  autoScroll: true,
 };
 
 // ── Settings Tab ──────────────────────────────────────────────────────────────
@@ -92,6 +103,40 @@ export class MediaTranscriptSettingTab extends PluginSettingTab {
               if (leaf.view instanceof MediaTranscriptView) leaf.view.applyPlayerWidth(v);
             }
           }),
+      );
+
+    new Setting(containerEl)
+      .setName('Transcript font size')
+      .setDesc(
+        `Text size of the transcript, in pixels (${MIN_FONT_SIZE}–${MAX_FONT_SIZE}). ` +
+          'The A− / A+ buttons in the transcript toolbar change this too.',
+      )
+      .addSlider(s =>
+        s
+          .setLimits(MIN_FONT_SIZE, MAX_FONT_SIZE, 1)
+          .setValue(this.plugin.settings.transcriptFontSize)
+          .setDynamicTooltip()
+          .onChange(async v => {
+            this.plugin.settings.transcriptFontSize = v;
+            await this.plugin.saveSettings();
+            this.plugin.applyFontSizeToOpenViews();
+          }),
+      );
+
+    // ── Playback ────────────────────────────────────────────────────────────
+    new Setting(containerEl).setName('Playback').setHeading();
+
+    new Setting(containerEl)
+      .setName('Auto-scroll transcript')
+      .setDesc(
+        'While playing, keep the current line vertically centered. ' +
+          'Scrolling by hand pauses this for a few seconds so you can read ahead.',
+      )
+      .addToggle(t =>
+        t.setValue(this.plugin.settings.autoScroll).onChange(async v => {
+          this.plugin.settings.autoScroll = v;
+          await this.plugin.saveSettings();
+        }),
       );
   }
 }

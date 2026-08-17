@@ -9,6 +9,15 @@ import {
 } from './utils/subtitleFinder';
 import { parseSubtitle, SubtitleSegment, formatTime } from './utils/subtitleParser';
 
+// Transcript text size bounds (px). Defined here rather than in settings.ts to
+// keep the import direction one-way: settings.ts → this file.
+export const MIN_FONT_SIZE = 10;
+export const MAX_FONT_SIZE = 32;
+
+// After scrolling by hand, leave auto-scroll off this long so reading ahead
+// isn't yanked back to the playing line on the next segment change.
+const MANUAL_SCROLL_GRACE_MS = 4000;
+
 export const VIEW_TYPE_MEDIA_TRANSCRIPT = 'media-transcript-view';
 
 /** Extract a readable message from an unknown thrown value. */
@@ -32,6 +41,9 @@ export class MediaTranscriptView extends FileView {
   // When opened via a subtitle file, the track to auto-select instead of the
   // priority-sorted default (null otherwise).
   private preferredTrackPath: string | null = null;
+  // Timestamp (ms) until which auto-scroll stays out of the way because the
+  // user scrolled the transcript by hand.
+  private manualScrollUntil = 0;
 
   constructor(leaf: WorkspaceLeaf, plugin: MediaTranscriptPlugin) {
     super(leaf);
@@ -100,6 +112,11 @@ export class MediaTranscriptView extends FileView {
     if (playerSide instanceof HTMLElement) {
       playerSide.setCssProps({ '--mt-player-width': `${pct}%` });
     }
+  }
+
+  /** Apply the transcript font size (px) to this open view. */
+  applyFontSize(px: number) {
+    this.transcriptEl?.setCssProps({ '--mt-font-size': `${px}px` });
   }
 
   async onUnloadFile(_file: TFile) {
@@ -191,6 +208,14 @@ export class MediaTranscriptView extends FileView {
 
     // Scrollable transcript
     this.transcriptEl = container.createDiv('mt-transcript');
+    this.applyFontSize(this.plugin.settings.transcriptFontSize);
+
+    // Hand-scrolling wins over auto-scroll for a few seconds (see syncHighlight).
+    for (const ev of ['wheel', 'touchmove'] as const) {
+      this.registerDomEvent(this.transcriptEl, ev, () => {
+        this.manualScrollUntil = Date.now() + MANUAL_SCROLL_GRACE_MS;
+      });
+    }
 
     // Find & load subtitle files
     this.subtitleTracks = findSubtitleFiles(file, this.app.vault, this.plugin.settings);
@@ -226,6 +251,21 @@ export class MediaTranscriptView extends FileView {
 
     const actions = toolbar.createDiv('mt-actions');
 
+    // Font size: A− / A+ (persisted, applied to every open transcript view)
+    const smaller = actions.createEl('button', {
+      text: 'A−',
+      cls: 'mt-btn mt-btn-font',
+      attr: { title: 'Smaller transcript text' },
+    });
+    smaller.addEventListener('click', () => this.nudgeFontSize(-1));
+
+    const bigger = actions.createEl('button', {
+      text: 'A+',
+      cls: 'mt-btn mt-btn-font',
+      attr: { title: 'Larger transcript text' },
+    });
+    bigger.addEventListener('click', () => this.nudgeFontSize(+1));
+
     // Export as markdown button
     const exportBtn = actions.createEl('button', {
       text: 'Export MD',
@@ -233,6 +273,20 @@ export class MediaTranscriptView extends FileView {
       attr: { title: 'Export the current transcript as a Markdown note' },
     });
     exportBtn.addEventListener('click', () => this.exportAsMarkdown(file));
+  }
+
+  /** Step the transcript font size by `delta` px, clamped, then persist + apply. */
+  private nudgeFontSize(delta: number) {
+    const next = Math.max(
+      MIN_FONT_SIZE,
+      Math.min(MAX_FONT_SIZE, this.plugin.settings.transcriptFontSize + delta),
+    );
+    if (next === this.plugin.settings.transcriptFontSize) return;
+    this.plugin.settings.transcriptFontSize = next;
+    void this.plugin.saveSettings();
+    this.plugin.applyFontSizeToOpenViews();
+    // Keep the playing line where it was after the reflow.
+    if (this.activeIndex >= 0) this.scrollActiveIntoCenter(false);
   }
 
   private populateTrackSelect(tracks: FoundSubtitleFile[]) {
@@ -329,6 +383,9 @@ export class MediaTranscriptView extends FileView {
 
       // Main click → seek
       el.addEventListener('click', () => {
+        // An explicit jump means the user is done reading ahead: let
+        // auto-scroll take over again right away.
+        this.manualScrollUntil = 0;
         if (this.mediaEl) {
           this.mediaEl.currentTime = seg.startTime;
           if (this.mediaEl.paused) this.mediaEl.play();
@@ -343,6 +400,7 @@ export class MediaTranscriptView extends FileView {
             .setTitle('Play from here')
             .setIcon('play')
             .onClick(() => {
+              this.manualScrollUntil = 0;
               if (this.mediaEl) {
                 this.mediaEl.currentTime = seg.startTime;
                 this.mediaEl.play();
@@ -393,10 +451,30 @@ export class MediaTranscriptView extends FileView {
     this.activeIndex = found;
 
     if (found >= 0) {
-      const el = this.segmentEls[found];
-      el?.addClass('mt-active');
-      el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      this.segmentEls[found]?.addClass('mt-active');
+      if (this.plugin.settings.autoScroll && Date.now() >= this.manualScrollUntil) {
+        this.scrollActiveIntoCenter(true);
+      }
     }
+  }
+
+  /**
+   * Scroll the transcript so the active segment sits vertically centered
+   * (instead of only scrolling once it reaches the bottom edge). Positions are
+   * taken from `offsetTop`, which is relative to `.mt-transcript` because that
+   * element is `position: relative` in styles.css.
+   */
+  private scrollActiveIntoCenter(smooth: boolean) {
+    const container = this.transcriptEl;
+    const el = this.segmentEls[this.activeIndex];
+    if (!container || !el) return;
+
+    const target = el.offsetTop - (container.clientHeight - el.offsetHeight) / 2;
+    const max = container.scrollHeight - container.clientHeight;
+    container.scrollTo({
+      top: Math.max(0, Math.min(max, target)),
+      behavior: smooth ? 'smooth' : 'auto',
+    });
   }
 
   // ─── Export ───────────────────────────────────────────────────────────────

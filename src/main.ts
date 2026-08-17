@@ -95,6 +95,15 @@ export default class MediaTranscriptPlugin extends Plugin {
     }
   }
 
+  /** Push the current transcript font size into every open transcript view. */
+  applyFontSizeToOpenViews() {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_MEDIA_TRANSCRIPT)) {
+      if (leaf.view instanceof MediaTranscriptView) {
+        leaf.view.applyFontSize(this.settings.transcriptFontSize);
+      }
+    }
+  }
+
   private mediaExts(): string[] {
     return [
       ...this.settings.supportedVideoExtensions,

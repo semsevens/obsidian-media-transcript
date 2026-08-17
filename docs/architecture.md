@@ -44,7 +44,7 @@ MediaTranscriptView.onLoadFile()
   loadTrack() → 读文件 → parseSubtitle() → renderSegments()
        ↓
   HTML5 media 元素            字幕段落列表
-    timeupdate ──────────────→ syncHighlight()（高亮当前段 + scrollIntoView）
+    timeupdate ──────────────→ syncHighlight()（高亮当前段 + 居中滚动）
 ```
 
 若同目录没有对应字幕 → 显示"未找到字幕"提示，不做其它动作。
@@ -52,10 +52,19 @@ MediaTranscriptView.onLoadFile()
 ## 布局与交互
 
 - **视频**：播放器在左（填满栏宽、`max-height:75vh`、吸顶），字幕在右；中间
-  `.mt-divider` 可拖动调整比例，结果存入 `settings.playerWidthPercent`（默认 48%）。
+  `.mt-divider` 可拖动调整比例，结果存入 `settings.playerWidthPercent`（默认 75%，设置页也有滑杆）。
 - **音频**：无画面 → 顶部一条 `.mt-audio-bar`（🎵 标题 + 原生播放器 + 倍速），
   字幕占满整宽。
 - **倍速**：`0.75/1/1.25/1.5/2x`，设置 `mediaEl.playbackRate`（视频音频通用）。
+- **字号**：字幕工具栏 `A− / A+`（步进 1px，范围 10–32），写入
+  `settings.transcriptFontSize`，通过 `.mt-transcript` 上的 `--mt-font-size`
+  行内变量生效；时间戳/说话人小块用 `em` 相对缩放。设置页滑杆改的是同一个值，
+  两处都会 `applyFontSizeToOpenViews()` 实时应用到所有已打开视图。
+- **自动滚动**：`scrollActiveIntoCenter()` 把当前段滚到面板**垂直居中**
+  （用 `offsetTop`，因此 `.mt-transcript` 必须 `position: relative`；末尾
+  `padding-bottom: 40vh` 让最后几段也能居中）。用户 `wheel/touchmove` 手动滚动后
+  暂停 4s（`MANUAL_SCROLL_GRACE_MS`），点击段落立即恢复；可用
+  `settings.autoScroll` 整体关闭（关闭后仍高亮）。
 - **交互**：左键点段落 → seek+play；右键 → 菜单（从此处播放 / 复制时间戳 / 复制文字）；
   点左侧时间块 → 复制时间戳；hover 仅高亮，不弹按钮（不影响布局）。
 - **扩展名接管**：`main.ts` 逐个 `registerExtensions`，被其他插件占用时先

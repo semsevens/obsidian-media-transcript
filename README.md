@@ -17,6 +17,10 @@ auto-highlights and scrolls into view.
 - **Audio**: a slim top control bar (title + player + speed) with a full-width transcript.
 - **Playback speed** `0.75×–2×` (video and audio).
 - **Click to seek, auto-highlight**: click a line to seek and play; the current line highlights.
+- **Auto-scroll keeps the playing line centered** — not stuck at the bottom edge. Scrolling by
+  hand pauses it for a few seconds so you can read ahead; click a line to resume immediately.
+- **Adjustable transcript text size** — `A−` / `A+` in the transcript toolbar, or the slider in
+  settings (10–32 px, remembered).
 - Right-click menu: play from here / copy timestamp / copy text; click a timestamp to copy it.
 - **Per-speaker labels** (colored `S0` / `S1` …) when a JSON transcript has 2+ speakers.
 - Export the current transcript to a Markdown note.
@@ -57,6 +61,10 @@ Place `<media-name>.<marker>.{json,srt,vtt}` next to the media, e.g. `lecture.mp
 
 - **Subtitle folder** — leave empty to use each media file's own folder.
 - **Subtitle priority** — order of filename `[marker]` tags when several subtitles exist.
+- **Video pane width** — how much width the player takes in video mode (dragging the divider
+  updates it too).
+- **Transcript font size** — text size in px; the toolbar's `A−` / `A+` change the same value.
+- **Auto-scroll transcript** — keep the playing line centered while playing (on by default).
 
 If a media extension is already handled by Obsidian core or another plugin, use the
 **Open in Media Transcript** file-menu item or the *Open current media file in transcript view*

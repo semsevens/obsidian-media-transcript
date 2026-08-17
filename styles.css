@@ -217,13 +217,27 @@ video.mt-media {
   background: var(--background-modifier-hover);
 }
 
+/* A− / A+ font-size steppers: equal width so the toolbar doesn't jitter */
+.mt-btn-font {
+  padding: 3px 7px;
+  min-width: 30px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── Transcript ────────────────────────────────── */
 
 .mt-transcript {
   flex: 1;
   overflow-y: auto;
-  padding: 8px 4px 24px;
-  scroll-behavior: auto; /* smooth is handled per-element */
+  /* Tall bottom padding so even the last lines can be scrolled to the middle. */
+  padding: 8px 4px 40vh;
+  scroll-behavior: auto; /* smooth is handled per scroll call */
+  /* Base size for the transcript; chips/text below scale off it in em.
+     Set as an inline custom property from settings.transcriptFontSize. */
+  font-size: var(--mt-font-size, 15px);
+  /* Makes this the offsetParent of the segments, so scrollActiveIntoCenter()
+     can use offsetTop directly. */
+  position: relative;
 }
 
 .mt-segment {
@@ -282,10 +296,10 @@ video.mt-media {
   font-variant-numeric: tabular-nums;
 }
 
-/* Transcript text */
+/* Transcript text — sized by .mt-transcript's --mt-font-size */
 .mt-txt {
   display: inline;
-  font-size: 0.88em;
+  font-size: 1em;
   color: var(--text-normal);
 }
 
