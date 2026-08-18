@@ -147,7 +147,9 @@ export default class MediaTranscriptPlugin extends Plugin {
   }
 
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    // loadData() is typed `any`; narrow it so the merge stays type-checked.
+    const saved = (await this.loadData()) as Partial<MediaTranscriptSettings> | null;
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved ?? {});
   }
 
   async saveSettings() {

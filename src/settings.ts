@@ -96,7 +96,6 @@ export class MediaTranscriptSettingTab extends PluginSettingTab {
         s
           .setLimits(20, 75, 1)
           .setValue(this.plugin.settings.playerWidthPercent)
-          .setDynamicTooltip()
           .onChange(async v => {
             this.plugin.settings.playerWidthPercent = v;
             await this.plugin.saveSettings();
@@ -117,7 +116,6 @@ export class MediaTranscriptSettingTab extends PluginSettingTab {
         s
           .setLimits(MIN_FONT_SIZE, MAX_FONT_SIZE, 1)
           .setValue(this.plugin.settings.transcriptFontSize)
-          .setDynamicTooltip()
           .onChange(async v => {
             this.plugin.settings.transcriptFontSize = v;
             await this.plugin.saveSettings();

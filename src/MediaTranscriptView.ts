@@ -402,7 +402,7 @@ export class MediaTranscriptView extends FileView {
       cls: 'mt-btn',
       attr: { title: 'Export the current transcript as a Markdown note' },
     });
-    exportBtn.addEventListener('click', () => this.exportAsMarkdown(file));
+    exportBtn.addEventListener('click', () => { void this.exportAsMarkdown(file); });
   }
 
   /** Step the transcript font size by `delta` px, clamped, then persist + apply. */
@@ -661,7 +661,7 @@ export class MediaTranscriptView extends FileView {
         this.manualScrollUntil = 0;
         if (this.mediaEl) {
           this.mediaEl.currentTime = seg.startTime;
-          if (this.mediaEl.paused) this.mediaEl.play();
+          if (this.mediaEl.paused) void this.mediaEl.play();
         }
       });
 
@@ -676,7 +676,7 @@ export class MediaTranscriptView extends FileView {
               this.manualScrollUntil = 0;
               if (this.mediaEl) {
                 this.mediaEl.currentTime = seg.startTime;
-                this.mediaEl.play();
+                void this.mediaEl.play();
               }
             }),
         );
