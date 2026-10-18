@@ -28,7 +28,7 @@ const VIDEO_EXT = /\.(mp4|mov|mkv|webm|avi|m4v)$/i;
 interface Item {
   path: string;              // in the library
   name: string;
-  collection: string;        // the library folder it is in
+  collection: string;        // the library folder it is in, or the collection its folder is named after
   vaultPath: string | null;  // this vault's own media: where it is in the vault
   size: number;
   backedUp: boolean;
@@ -148,8 +148,14 @@ export class MediaList {
     };
     const twins = new Set(index.map(e => twinOf(e.path)).filter((p): p is string => p !== null));
 
+    // This vault's media in a folder named after a collection (raw/media/南添/…, beside
+    // the collection's transcripts) is shown with that collection.
+    const collections = new Set(index.map(e => e.path.slice(0, e.path.indexOf('/'))).filter(c => c !== this.own));
     return index.filter(e => MEDIA_EXT.test(e.path) && !twins.has(e.path)).map(e => {
-      const collection = e.path.slice(0, e.path.indexOf('/'));
+      const folder = e.path.slice(0, e.path.indexOf('/'));
+      const collection = folder === this.own
+        ? e.path.split('/').slice(1, -1).reverse().find(d => collections.has(d)) ?? folder
+        : folder;
       const name = e.path.slice(e.path.lastIndexOf('/') + 1);
       const base = name.slice(0, name.lastIndexOf('.'));
       const notes = [...(notesByName.get(name.toLowerCase()) ?? [])]
@@ -162,11 +168,11 @@ export class MediaList {
         path: e.path,
         name,
         collection,
-        vaultPath: collection === this.own ? e.path.slice(collection.length + 1) : null,
+        vaultPath: folder === this.own ? e.path.slice(folder.length + 1) : null,
         size: e.size,
         backedUp: !!e.backup && Object.keys(e.backup).length > 0,
         // Its own media was uploaded as it was made; a collection was brought in all at once.
-        recorded: recordedAt(name) ?? (collection === this.own && e.added ? new Date(e.added) : null),
+        recorded: recordedAt(name) ?? (folder === this.own && e.added ? new Date(e.added) : null),
         title: notes[0] && !isDatedName(notes[0].basename) ? notes[0].basename : isGenericName(name) ? base : withoutDate(base),
         notes,
         transcript,
