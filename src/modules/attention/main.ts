@@ -268,7 +268,11 @@ export default class AttentionPlugin extends ModulePlugin {
     for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
       const view = leaf.view;
       if (view instanceof MarkdownView && view.getMode() === 'preview') {
+        const scroll = view.previewMode.getScroll();
         view.previewMode.rerender(true);
+        // Full rerenders discard section heights. Let Obsidian restore its
+        // source-line position once the replacement sections are rendered.
+        if (Number.isFinite(scroll)) view.setEphemeralState({ scroll });
       }
     }
   }
