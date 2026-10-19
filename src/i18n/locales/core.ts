@@ -32,6 +32,7 @@ const en = {
   // Where media was looked for
   'core.searchedUnreachable': '{place} (unreachable)',
   'core.searchedSameFolder': 'same folder ({dir})',
+  'core.searchedDevice': 'kept on this device',
   'core.searchedVault': 'vault ({name})',
   'core.searchedDesktopOnly': '{place} (skipped: desktop only)',
   'core.searchedUnavailable': '{place} (unavailable)',
@@ -166,6 +167,7 @@ const zh: Partial<Record<keyof typeof en, string>> = {
 
   'core.searchedUnreachable': '{place}（无法连接）',
   'core.searchedSameFolder': '同一文件夹（{dir}）',
+  'core.searchedDevice': '本机缓存',
   'core.searchedVault': '库（{name}）',
   'core.searchedDesktopOnly': '{place}（已跳过：仅限桌面端）',
   'core.searchedUnavailable': '{place}（不可用）',

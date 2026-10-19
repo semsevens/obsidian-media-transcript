@@ -3,6 +3,8 @@ import { MODULES } from './modules';
 import type MediaTranscriptPlugin from './main';
 import { parseFolderList } from './utils/mediaMatch';
 import { t } from './i18n';
+import { formatSize } from './utils/format';
+import { ConfirmModal } from './library/LibraryView';
 import {
   MediaTranscriptView,
   VIEW_TYPE_MEDIA_TRANSCRIPT,
@@ -223,6 +225,8 @@ export class MediaTranscriptSettingTab extends PluginSettingTab {
         }),
       );
 
+    this.displayCache(containerEl);
+
     // Each running module's own settings, in a section of their own.
     for (const info of MODULES) {
       const tab = this.plugin.modules?.loaded.get(info.key)?.settingTab;
@@ -294,6 +298,47 @@ export class MediaTranscriptSettingTab extends PluginSettingTab {
   }
 
   /** Which of the features that used to be separate plugins are on. */
+  /** Media kept on this device to play offline (see MediaCache). Per device: not synced. */
+  private displayCache(containerEl: HTMLElement): void {
+    const { cache } = this.plugin;
+    if (!cache?.available) return;
+    new Setting(containerEl).setName(t('library.cacheHeading')).setHeading();
+    const prefs = cache.prefs;
+    new Setting(containerEl)
+      .setName(t('library.cacheAuto'))
+      .setDesc(t('library.cacheAutoDesc'))
+      .addToggle(toggle => toggle.setValue(prefs.auto).onChange(v => cache.setPrefs({ auto: v })));
+    new Setting(containerEl)
+      .setName(t('library.cacheWifiOnly'))
+      .setDesc(t('library.cacheWifiOnlyDesc'))
+      .addToggle(toggle => toggle.setValue(prefs.wifiOnly).onChange(v => cache.setPrefs({ wifiOnly: v })));
+    new Setting(containerEl)
+      .setName(t('library.cacheLimit'))
+      .setDesc(t('library.cacheLimitDesc'))
+      .addDropdown(d => {
+        for (const gb of [1, 2, 5, 10, 20, 50]) d.addOption(String(gb), `${gb} GB`);
+        if (![1, 2, 5, 10, 20, 50].includes(prefs.limitGB)) d.addOption(String(prefs.limitGB), `${prefs.limitGB} GB`);
+        d.setValue(String(prefs.limitGB)).onChange(v => {
+          cache.setPrefs({ limitGB: Number(v) });
+          this.display();
+        });
+      });
+    const usage = cache.usage();
+    new Setting(containerEl)
+      .setName(t('library.cacheUsed', { used: formatSize(usage.total), limit: formatSize(cache.limit) }))
+      .setDesc(t('library.cacheUsedDesc', { kept: formatSize(usage.kept), auto: formatSize(usage.auto), files: usage.files }))
+      .addButton(b => b.setButtonText(t('library.cacheClearAuto')).onClick(async () => {
+        await cache.clear('auto');
+        this.display();
+      }))
+      .addButton(b => b.setButtonText(t('library.cacheClearAll')).setWarning().onClick(() => {
+        new ConfirmModal(this.app, t('library.cacheClearAllTitle'), t('library.cacheClearAllDesc'), t('library.cacheClearAll'), async () => {
+          await cache.clear('all');
+          this.display();
+        }).open();
+      }));
+  }
+
   private displayModuleSwitches(containerEl: HTMLElement): void {
     const modules = this.plugin.modules;
     if (!modules) return;

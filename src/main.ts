@@ -7,7 +7,7 @@ import { MediaTranscriptSettingTab, DEFAULT_SETTINGS } from './settings';
 import type { MediaTranscriptSettings } from './settings';
 import { SUBTITLE_EXTENSIONS, findSubtitleFiles, findSubtitleTracks } from './utils/subtitleFinder';
 import { parseTimeFragment } from './utils/timeFragment';
-import { MediaLocator } from './mediaLocator';
+import { MediaLocator, type ResolvedMedia } from './mediaLocator';
 import { TranscriptIndex } from './transcriptIndex';
 import { LinkMediaModal } from './linkMediaModal';
 import { Modules, ModuleState } from './modules';
@@ -19,6 +19,7 @@ import { LibraryView, VIEW_TYPE_LIBRARY } from './library/LibraryView';
 import { TranscriptSync } from './library/transcriptSync';
 import { NowPlaying } from './library/NowPlaying';
 import { MiniPlayer } from './library/PlayerBar';
+import { MediaCache } from './library/mediaCache';
 import { t } from './i18n';
 
 // Subtitle extensions we globally register for click-to-open. Clicking any of
@@ -53,6 +54,7 @@ export default class MediaTranscriptPlugin extends Plugin {
   uploader!: Uploader;
   transcriptSync!: TranscriptSync;
   nowPlaying!: NowPlaying;
+  cache!: MediaCache;
   // The modules' part of data.json, kept beside the settings above.
   private moduleState: ModuleState = { modules: {}, enabledModules: {} };
   // Uploads an earlier version queued in data.json; this device takes them over.
@@ -72,6 +74,8 @@ export default class MediaTranscriptPlugin extends Plugin {
     this.uploader.start();
     this.transcriptSync = new TranscriptSync(this);
     this.transcriptSync.start();
+    this.cache = new MediaCache(() => this.settings.serverUrl);
+    this.register(() => this.cache.close());
     this.nowPlaying = new NowPlaying(this);
     new MiniPlayer(this, this.nowPlaying);
     this.registerView(VIEW_TYPE_LIBRARY, leaf => new LibraryView(leaf, this));
@@ -92,10 +96,14 @@ export default class MediaTranscriptPlugin extends Plugin {
       },
     });
     this.transcripts = new TranscriptIndex(this);
-    this.mediaLocator = new MediaLocator(this.app, () => this.settings, f => this.transcripts.sourceOf(f));
+    this.mediaLocator = new MediaLocator(this.app, () => this.settings, f => this.transcripts.sourceOf(f), names => this.cachedMedia(names));
     this.app.workspace.onLayoutReady(() => {
       this.transcripts.start();
       this.mediaLocator.warm();
+      // Let go what has waited too long, and go on with downloads broken off.
+      window.setTimeout(() => {
+        void this.cache.trim().then(() => this.cache.resume());
+      }, 10000);
     });
     this.registerEvent(this.app.vault.on('rename', (f, oldPath) => { void this.followRename(f, oldPath); }));
 
@@ -496,6 +504,16 @@ export default class MediaTranscriptPlugin extends Plugin {
       state: { file: file.path },
       active: true,
     });
+  }
+
+  /** Media of one of these names kept on this device (see MediaCache), to play offline. */
+  async cachedMedia(names: string[]): Promise<ResolvedMedia | null> {
+    const path = this.cache.findByName(names);
+    const src = path ? await this.cache.url(path) : null;
+    if (!path || !src) return null;
+    const name = path.slice(path.lastIndexOf('/') + 1);
+    const dot = name.lastIndexOf('.');
+    return { src, basename: name.slice(0, dot), extension: name.slice(dot + 1).toLowerCase(), file: null, location: this.library.libraryUrl(path) };
   }
 
   async openLibrary() {

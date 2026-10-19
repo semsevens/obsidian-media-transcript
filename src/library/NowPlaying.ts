@@ -2,12 +2,16 @@ import type { TFile } from 'obsidian';
 import type MediaTranscriptPlugin from '../main';
 import { DeviceState } from './deviceState';
 import { parseSubtitle, type SubtitleSegment } from '../utils/subtitleParser';
+import { resumeAt } from './cachePolicy';
 
 /** What is played: a file on the server, and its transcript if the vault has one. */
 export interface Track {
   path: string;              // in the library: what the list knows it by
-  url: string;               // what is played (a video's audio twin, say)
+  key: string;               // in the library: what is played (a video's audio twin, say)
+  url: string;               // where the server serves it
+  size: number;              // of what is played, 0 if unknown
   title: string;
+  subtitle: string;          // where it is from, when
   transcript: TFile | null;
 }
 
@@ -29,6 +33,11 @@ export class NowPlaying {
   private segments: SubtitleSegment[] = [];
   private listeners = new Set<() => void>();
   private readonly device: DeviceState;
+  private lastKept = 0;
+  /** Played from this device's copy, not the server. */
+  local = false;
+  /** It could not be played (offline, and not on this device). */
+  failed = false;
 
   constructor(private readonly plugin: MediaTranscriptPlugin) {
     this.device = new DeviceState(plugin.app);
@@ -63,6 +72,13 @@ export class NowPlaying {
     return i >= 0 ? this.segments[i].text : '';
   }
 
+  /** The line before, the line being said, the line after ('' where there is none). */
+  get around(): [string, string, string] {
+    const i = lineAt(this.segments, this.time);
+    const at = (j: number) => this.segments[j]?.text ?? '';
+    return [i > 0 ? at(i - 1) : '', i >= 0 ? at(i) : '', at(i + 1)];
+  }
+
   /** Call `fn` whenever anything changes (the track, playing or not, the time); returns how to stop. */
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
@@ -77,13 +93,31 @@ export class NowPlaying {
     }
     this.stop();
     this.track = track;
-    const audio = (this.audio = new Audio(track.url));
+    this.local = false;
+    this.failed = false;
+    const { cache } = this.plugin;
+    cache.playing = track.key;
+    const audio = (this.audio = new Audio());
     audio.preload = 'auto';
-    audio.playbackRate = this.rate;
+    for (const type of ['play', 'pause', 'timeupdate', 'loadedmetadata', 'ratechange']) audio.addEventListener(type, () => this.changed());
     // Not on the page, so its own start is not seen by the listener above.
     audio.addEventListener('play', () => pauseAllBut(audio));
-    for (const type of ['play', 'pause', 'timeupdate', 'loadedmetadata', 'ratechange']) audio.addEventListener(type, () => this.changed());
-    audio.addEventListener('ended', () => this.stop());
+    audio.addEventListener('ended', () => {
+      this.keepPlace(true);
+      this.stop();
+    });
+    audio.addEventListener('pause', () => this.keepPlace(true));
+    audio.addEventListener('timeupdate', () => this.keepPlace(false));
+    audio.addEventListener('error', () => {
+      if (this.audio !== audio) return;
+      this.failed = true;
+      this.changed();
+    });
+    // Where it was left last time.
+    const from = resumeAt(cache.statsOf(track.key));
+    audio.addEventListener('loadedmetadata', () => {
+      if (from > 0 && audio.currentTime < 1) audio.currentTime = from;
+    }, { once: true });
     const file = track.transcript;
     if (file) {
       void this.plugin.app.vault.cachedRead(file).then(text => {
@@ -94,7 +128,26 @@ export class NowPlaying {
     }
     this.mediaSession(track);
     this.changed();
-    void audio.play().catch(() => this.changed());
+    void cache.url(track.key).then(local => {
+      if (this.audio !== audio) return;
+      this.local = !!local;
+      audio.src = local ?? track.url;
+      audio.playbackRate = this.rate;
+      cache.played(track.key, from, 0, true);
+      // Kept on this device too, to play offline next time.
+      if (!local) cache.auto({ path: track.key, url: track.url, size: track.size });
+      this.changed();
+      void audio.play().catch(() => this.changed());
+    });
+  }
+
+  /** Keep where it is, to take it up there next time (and to know what was listened to). */
+  private keepPlace(now: boolean): void {
+    const { audio, track } = this;
+    if (!audio || !track || audio.readyState === 0) return;
+    if (!now && Date.now() - this.lastKept < 5000) return;
+    this.lastKept = Date.now();
+    this.plugin.cache.played(track.key, audio.ended ? this.duration : audio.currentTime, this.duration);
   }
 
   toggle(): void {
@@ -129,9 +182,11 @@ export class NowPlaying {
   stop(): void {
     const { audio } = this;
     if (!audio && !this.track) return;
+    this.keepPlace(true);
     this.audio = null;
     this.track = null;
     this.segments = [];
+    this.plugin.cache.playing = null;
     if (audio) {
       audio.pause();
       audio.removeAttribute('src');

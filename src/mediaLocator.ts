@@ -120,6 +120,8 @@ export class MediaLocator {
     private settings: () => MediaTranscriptSettings,
     // What the transcript itself says its media is called (see TranscriptIndex).
     private sourceOf: (subtitle: TFile) => Promise<string | null>,
+    // A copy kept on this device, by name (see MediaCache): played before asking a server.
+    private cached: (names: string[]) => Promise<ResolvedMedia | null> = () => Promise.resolve(null),
   ) {}
 
   /** Forget external listings and server indexes (settings changed, or a retry). */
@@ -161,6 +163,11 @@ export class MediaLocator {
     };
 
     const fromServers = async (): Promise<MediaLookup | null> => {
+      const kept = await this.cached(source ? [source, ...candidates] : candidates);
+      if (kept) {
+        searched.push(t('core.searchedDevice'));
+        return { media: kept, searched };
+      }
       for (const base of settings.mediaUrls) {
         const { url, twin, reachable } = await this.findRemote(base, candidates, source);
         searched.push(reachable ? base : t('core.searchedUnreachable', { place: base }));

@@ -37,6 +37,8 @@ interface Item {
   transcript: TFile | null;
   /** A video's audio, the same name as .m4a beside it: what the row plays, a fraction of the size. */
   listen: string | null;
+  listenSize: number;
+  added: number;             // ms, when the server got it (0 if it does not say)
 }
 
 export interface MediaHost {
@@ -44,6 +46,7 @@ export interface MediaHost {
   rename(vaultPath: string): void;
   delete(vaultPath: string): void;
   restore(item: TrashItem): Promise<void>;
+  confirm(heading: string, body: string, action: string, onConfirm: () => Promise<void>): void;
 }
 
 /**
@@ -61,6 +64,10 @@ export class MediaList {
   private jobs = new Map<string, Job>();
   private collection: string | null = null;  // null: this vault's own
   private limit = PAGE;
+  /** Only what this device can play without the server. */
+  private offlineOnly = false;
+  /** The offline line as last drawn, with the rows it is about: redrawn as downloads go on. */
+  private offlineBar: { el: HTMLElement; inView: Item[] } | null = null;
   private error: string | null = null;
   private retried = false;
   /** Read from each shown transcript once: the media's length and opening words. */
@@ -97,6 +104,7 @@ export class MediaList {
       for (const j of jobs.jobs.sort((a, b) => a.created - b.created)) this.jobs.set(j.path, j);
       this.show(index);
       this.device.set('mediaIndex', index);
+      this.prefetch();
       this.error = null;
       this.retried = false;
     } catch (e) {
@@ -138,6 +146,7 @@ export class MediaList {
 
     // A video's audio twin (same name, .m4a) is listed with the video, not apart.
     const paths = new Set(index.map(e => e.path));
+    const sizes = new Map(index.map(e => [e.path, e.size]));
     const twinOf = (path: string) => {
       if (!VIDEO_EXT.test(path)) return null;
       const audio = path.replace(/\.[^.]+$/, '.m4a');
@@ -174,6 +183,8 @@ export class MediaList {
         notes,
         transcript,
         listen: twinOf(e.path),
+        listenSize: sizes.get(twinOf(e.path) ?? '') ?? 0,
+        added: e.added ? Date.parse(e.added) || 0 : 0,
       };
     });
   }
@@ -204,8 +215,11 @@ export class MediaList {
     }));
 
     this.renderCollections(list, counts, current);
+    this.renderOffline(list, inView);
 
+    const { cache } = this.plugin;
     const shown = inView
+      .filter(it => !this.offlineOnly || cache.complete(this.played(it)))
       .filter(it => !filter || [it.path, it.title, this.details.get(it.path)?.words ?? '', ...it.notes.map(n => n.path)].join('\n').toLowerCase().includes(filter))
       .sort((a, b) => (b.recorded?.getTime() ?? 0) - (a.recorded?.getTime() ?? 0) || a.name.localeCompare(b.name));
     let group: string | null = null;
@@ -225,10 +239,95 @@ export class MediaList {
       });
     }
     if (shown.length === 0) {
-      list.createDiv({ cls: 'mo-lib-empty', text: filter ? t('library.nothingMatches') : t('library.empty') });
+      list.createDiv({ cls: 'mo-lib-empty', text: filter || this.offlineOnly ? t('library.nothingMatches') : t('library.empty') });
     }
     if (current === this.own && this.collection !== '*') this.renderTrash(list);
     this.paintPlaying(list);
+    this.paintCache(list);
+  }
+
+  /** What the row plays: a video's audio twin, or the file itself. */
+  private played(it: Item): string {
+    return it.listen ?? it.path;
+  }
+
+  private fetchable(it: Item) {
+    const path = this.played(it);
+    return { path, url: this.plugin.library.libraryUrl(path), size: it.listen ? it.listenSize : it.size, added: it.added };
+  }
+
+  /** New audio of this vault's own, and of collections listened to lately, fetched ahead to play offline. */
+  private prefetch(): void {
+    const { cache } = this.plugin;
+    const recent = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const listened = new Set(this.items.filter(it => (cache.statsOf(this.played(it))?.last ?? 0) > recent).map(it => it.collection));
+    cache.prefetch(this.items
+      .filter(it => !it.vaultPath || !(this.plugin.app.vault.getAbstractFileByPath(it.vaultPath) instanceof TFile))
+      .filter(it => it.collection === this.own || listened.has(it.collection))
+      .filter(it => !VIDEO_EXT.test(this.played(it)))
+      .map(it => this.fetchable(it)));
+  }
+
+  /** Only what plays offline; download all shown here; how much this device keeps. */
+  private renderOffline(list: HTMLElement, inView: Item[]): void {
+    if (!this.plugin.cache.available) return;
+    this.offlineBar = { el: list.createDiv('mo-lib-offline'), inView };
+    this.fillOffline();
+  }
+
+  private fillOffline(): void {
+    const { cache } = this.plugin;
+    if (!this.offlineBar) return;
+    const { el: bar, inView } = this.offlineBar;
+    bar.empty();
+    const here = inView.filter(it => cache.complete(this.played(it))).length;
+    const chip = bar.createEl('button', { cls: `mo-lib-chip${this.offlineOnly ? ' is-active' : ''}` });
+    setIcon(chip.createSpan('mo-lib-chip-icon'), 'hard-drive-download');
+    chip.createSpan({ text: t('library.offlineOnly', { count: here }) });
+    chip.addEventListener('click', () => {
+      this.offlineOnly = !this.offlineOnly;
+      this.host.rerender();
+    });
+    const missing = inView.filter(it => !cache.complete(this.played(it)));
+    if (missing.length && !this.offlineOnly) {
+      const size = missing.reduce((n, it) => n + this.fetchable(it).size, 0);
+      const all = bar.createEl('button', { cls: 'mo-lib-chip', text: t('library.downloadAll', { count: missing.length, size: formatSize(size) }) });
+      all.addEventListener('click', () => this.host.confirm(
+        t('library.downloadAllTitle', { count: missing.length }),
+        t('library.downloadAllDesc', { size: formatSize(size), limit: formatSize(cache.limit) }),
+        t('library.downloadAllAction'),
+        () => {
+          for (const it of missing) cache.keep(this.fetchable(it));
+          return Promise.resolve();
+        },
+      ));
+    }
+    bar.createSpan({ cls: 'mo-lib-offline-usage', text: t('library.cacheUsage', { used: formatSize(cache.usage().total) }) });
+  }
+
+  /** Each row's state on this device: kept, cached, downloading. After a redraw, and as downloads go on. */
+  paintCache(list: HTMLElement): void {
+    const { cache } = this.plugin;
+    if (this.offlineBar && list.contains(this.offlineBar.el)) this.fillOffline();
+    const byPath = new Map(this.items.map(it => [it.path, it]));
+    const offline = !!this.error;
+    for (const row of Array.from(list.querySelectorAll<HTMLElement>('.mo-lib-media-row'))) {
+      const it = byPath.get(row.dataset.path ?? '');
+      const badge = row.querySelector<HTMLElement>('.mo-lib-cache');
+      if (!it || !badge) continue;
+      const path = this.played(it);
+      const e = cache.entry(path);
+      const p = cache.progress(path);
+      const done = cache.complete(path);
+      const text = done ? t(e?.kind === 'kept' ? 'library.badgeKept' : 'library.badgeCached')
+        : p?.active ? t('library.badgeDownloading', { percent: p.size ? Math.floor((p.have / p.size) * 100) : 0 })
+          : p && e?.kind === 'kept' ? t('library.badgeWaiting') : '';
+      if (badge.getText() !== text) badge.setText(text);
+      badge.toggle(!!text);
+      badge.toggleClass('is-kept', done && e?.kind === 'kept');
+      const local = done || !!(it.vaultPath && this.plugin.app.vault.getAbstractFileByPath(it.vaultPath) instanceof TFile);
+      row.toggleClass('is-offline', offline && !local);
+    }
   }
 
   /** Show which row is playing, and whether it is paused: after a redraw, and as the player changes. */
@@ -309,6 +408,7 @@ export class MediaList {
     } else if (!it.transcript) {
       meta.createSpan({ cls: 'mo-lib-badge', text: t('library.badgeNoTranscript') });
     }
+    meta.createSpan({ cls: 'mo-lib-badge mo-lib-cache' });
     // Backups are kept track of for this vault's own media only.
     if (!it.backedUp && it.vaultPath) meta.createSpan({ cls: 'mo-lib-badge mo-lib-nobackup', text: t('library.badgeNoBackup'), attr: { title: t('library.badgeNoBackupTip') } });
     if (it.vaultPath && this.plugin.app.vault.getAbstractFileByPath(it.vaultPath) instanceof TFile) {
@@ -350,6 +450,23 @@ export class MediaList {
       const tr = it.transcript;
       menu.addItem(i => i.setTitle(t('library.menuOpenTranscript')).setIcon('file-text').onClick(() => { void this.plugin.openTranscript(tr); }));
     }
+    const { cache } = this.plugin;
+    if (cache.available) {
+      const path = this.played(it);
+      const e = cache.entry(path);
+      if (cache.complete(path) && e?.kind === 'kept') {
+        menu.addItem(i => i.setTitle(t('library.cacheRemove')).setIcon('trash-2').onClick(() => { void cache.remove(path); }));
+      } else if (cache.complete(path)) {
+        menu.addItem(i => i.setTitle(t('library.cacheKeep')).setIcon('pin').onClick(() => cache.keep(this.fetchable(it))));
+        menu.addItem(i => i.setTitle(t('library.cacheRemove')).setIcon('trash-2').onClick(() => { void cache.remove(path); }));
+      } else if (cache.progress(path) && e?.kind === 'kept') {
+        menu.addItem(i => i.setTitle(t('library.cacheCancel')).setIcon('x').onClick(() => { void cache.remove(path); }));
+      } else {
+        const size = this.fetchable(it).size;
+        menu.addItem(i => i.setTitle(size ? t('library.cacheDownloadSized', { size: formatSize(size) }) : t('library.cacheDownload'))
+          .setIcon('download').onClick(() => cache.keep(this.fetchable(it))));
+      }
+    }
     for (const n of it.notes.slice(0, 5)) {
       menu.addItem(i => i.setTitle(t('library.menuOpenNote', { name: n.basename })).setIcon('sticky-note')
         .onClick(() => { void this.plugin.app.workspace.getLeaf(false).openFile(n); }));
@@ -376,10 +493,15 @@ export class MediaList {
 
   /** Play `it` in the player, or pause and resume it if it is the one playing. */
   private play(it: Item): void {
+    const f = this.fetchable(it);
+    const collection = it.collection === this.own ? t('library.collectionMine') : it.collection;
     this.plugin.nowPlaying.play({
       path: it.path,
-      url: this.plugin.library.libraryUrl(it.listen ?? it.path),
+      key: f.path,
+      url: f.url,
+      size: f.size,
       title: (isGenericName(it.name) && this.details.get(it.path)?.words) || it.title,
+      subtitle: [collection, it.recorded ? formatWhen(it.recorded) : ''].filter(Boolean).join(' · '),
       transcript: it.transcript,
     });
   }

@@ -1,113 +1,243 @@
-import { Platform, setIcon } from 'obsidian';
+import { Menu, Modal, Platform, setIcon } from 'obsidian';
 import type MediaTranscriptPlugin from '../main';
 import { formatDuration } from './mediaInfo';
 import type { NowPlaying } from './NowPlaying';
+import { formatSize } from '../utils/format';
 import { t } from '../i18n';
 
 const VIEW_TYPE_LIBRARY = 'media-one-library';
 
-function iconButton(parent: HTMLElement, icon: string, label: string, cls: string, onClick: () => void): HTMLButtonElement {
+function iconButton(parent: HTMLElement, icon: string, label: string, cls: string, onClick: (evt: MouseEvent) => void): HTMLButtonElement {
   const b = parent.createEl('button', { cls: `clickable-icon ${cls}`, attr: { 'aria-label': label } });
   setIcon(b, icon);
   b.addEventListener('click', evt => {
     evt.stopPropagation();
-    onClick();
+    onClick(evt);
   });
   return b;
 }
 
-function rateLabel(rate: number): string {
-  return `${rate}×`;
+/** Set a button's icon and label to playing or paused, only when it changes. */
+function paintPlay(button: HTMLElement, playing: boolean): void {
+  const icon = playing ? 'pause' : 'play';
+  if (button.dataset.icon === icon) return;
+  button.dataset.icon = icon;
+  setIcon(button, icon);
+  button.setAttr('aria-label', t(playing ? 'library.playerPause' : 'library.menuPlay'));
 }
 
 /**
- * The player at the foot of the media library: what is playing, the line
- * being said (tap it to read along in the transcript), where it is, and the
- * controls. Hidden while nothing plays. Returns how to take it down.
+ * The player bar, the same wherever it is (at the foot of the library,
+ * floating above a phone's navigation): play or pause, what is playing and
+ * the line being said, stop. Tap it to open what is playing in full.
+ * Hidden while nothing plays. Returns how to take it down.
  */
-export function renderDock(parent: HTMLElement, np: NowPlaying): () => void {
-  const dock = parent.createDiv('mo-player');
-  const info = dock.createDiv('mo-player-info');
-  const text = info.createDiv('mo-player-text');
-  const title = text.createDiv('mo-player-title');
-  const caption = text.createDiv('mo-player-caption');
-  caption.setAttr('aria-label', t('library.playerReadAlong'));
-  caption.addEventListener('click', () => { void np.openTranscript(); });
-  iconButton(info, 'x', t('library.stop'), 'mo-player-close', () => np.stop());
-
-  const controls = dock.createDiv('mo-player-controls');
-  iconButton(controls, 'rotate-ccw', t('library.playerBack'), 'mo-player-back', () => np.back());
-  const play = iconButton(controls, 'play', t('library.menuPlay'), 'mo-player-play', () => np.toggle());
-  iconButton(controls, 'rotate-cw', t('library.playerAhead'), 'mo-player-ahead', () => np.ahead());
-  const seek = controls.createEl('input', { type: 'range', cls: 'mo-player-seek', attr: { min: '0', max: '1000', value: '0', 'aria-label': t('library.seek') } });
-  let dragging = false;
-  seek.addEventListener('input', () => {
-    dragging = true;
-    if (np.duration) np.seek((Number(seek.value) / 1000) * np.duration);
-  });
-  seek.addEventListener('change', () => { dragging = false; });
-  const time = controls.createSpan('mo-player-time');
-  const rate = controls.createEl('button', { cls: 'mo-player-rate', attr: { 'aria-label': t('library.playerRate') } });
-  rate.addEventListener('click', () => np.nextRate());
-
-  let wasPlaying: boolean | null = null;
+export function renderBar(parent: HTMLElement, plugin: MediaTranscriptPlugin, cls: string, shown: () => boolean = () => true): { el: HTMLElement; paint: () => void; remove: () => void } {
+  const np = plugin.nowPlaying;
+  const bar = parent.createDiv(`mo-bar ${cls}`);
+  const play = iconButton(bar, 'play', t('library.menuPlay'), 'mo-bar-play', () => np.toggle());
+  const text = bar.createDiv('mo-bar-text');
+  const title = text.createDiv('mo-bar-title');
+  const line = text.createDiv('mo-bar-line');
+  text.addEventListener('click', () => new NowPlayingModal(plugin).open());
+  iconButton(bar, 'x', t('library.stop'), 'mo-bar-close', () => np.stop());
+  const progress = bar.createDiv('mo-bar-progress');
   const paint = () => {
     const track = np.track;
-    dock.toggleClass('is-hidden', !track);
+    bar.toggleClass('is-hidden', !track || !shown());
     if (!track) return;
-    // Read once the library is on the page (a phone pads its foot more).
-    const pad = getComputedStyle(parent).paddingBottom;
-    if (pad && pad !== dock.style.getPropertyValue('--mo-dock-pad')) dock.style.setProperty('--mo-dock-pad', pad);
+    paintPlay(play, np.playing);
     title.setText(track.title);
-    const line = np.line;
-    caption.setText(line);
-    caption.toggle(!!track.transcript);
-    caption.toggleClass('is-empty', !line);
-    if (np.playing !== wasPlaying) {
-      wasPlaying = np.playing;
-      setIcon(play, np.playing ? 'pause' : 'play');
-      play.setAttr('aria-label', t(np.playing ? 'library.playerPause' : 'library.menuPlay'));
-    }
     const d = np.duration;
-    if (!dragging && d) seek.value = String(Math.round((np.time / d) * 1000));
-    seek.style.setProperty('--mo-progress', `${Number(seek.value) / 10}%`);
-    time.setText(d ? `${formatDuration(np.time)} / ${formatDuration(d)}` : formatDuration(np.time));
-    rate.setText(rateLabel(np.rate));
+    const said = np.failed ? t('library.playerOffline') : np.line;
+    line.setText(said || (d ? `${formatDuration(np.time)} / ${formatDuration(d)}` : formatDuration(np.time)));
+    line.toggleClass('is-error', np.failed);
+    progress.style.width = d ? `${(np.time / d) * 100}%` : '0';
   };
   paint();
   const unsubscribe = np.subscribe(paint);
+  return { el: bar, paint, remove: () => { unsubscribe(); bar.remove(); } };
+}
+
+/**
+ * The player at the foot of the library. On a phone the library's foot is
+ * padded (for the navigation bar); the bar sits above that.
+ */
+export function renderDock(parent: HTMLElement, plugin: MediaTranscriptPlugin): () => void {
+  const bar = renderBar(parent, plugin, 'mo-dock');
+  const unsubscribe = plugin.nowPlaying.subscribe(() => {
+    // Read once the library is on the page (a phone pads its foot more).
+    const pad = getComputedStyle(parent).paddingBottom;
+    if (pad && pad !== bar.el.style.getPropertyValue('--mo-dock-pad')) bar.el.style.setProperty('--mo-dock-pad', pad);
+  });
   return () => {
     unsubscribe();
-    dock.remove();
+    bar.remove();
   };
+}
+
+/**
+ * What is playing, in full: the lines being said, where it is, the controls,
+ * the speed, keeping it on this device, and reading along in its transcript.
+ * A modal, so a phone's back closes it.
+ */
+export class NowPlayingModal extends Modal {
+  private unsubscribe: (() => void) | null = null;
+
+  constructor(private readonly plugin: MediaTranscriptPlugin) {
+    super(plugin.app);
+  }
+
+  onOpen(): void {
+    const { plugin } = this;
+    const np = plugin.nowPlaying;
+    const { cache } = plugin;
+    this.modalEl.addClass('mo-np-modal');
+    // The floating bar is this, small: not both at once.
+    document.body.addClass('mo-np-open');
+    const root = this.contentEl.createDiv('mo-np');
+    const title = root.createDiv('mo-np-title');
+    const subtitle = root.createDiv('mo-np-subtitle');
+    const lines = root.createDiv('mo-np-lines');
+    const before = lines.createDiv('mo-np-line is-before');
+    const now = lines.createDiv('mo-np-line is-now');
+    const after = lines.createDiv('mo-np-line is-after');
+    lines.setAttr('aria-label', t('library.playerReadAlong'));
+    lines.addEventListener('click', () => {
+      this.close();
+      void np.openTranscript();
+    });
+
+    const seek = root.createEl('input', { type: 'range', cls: 'mo-np-seek', attr: { min: '0', max: '1000', value: '0', 'aria-label': t('library.seek') } });
+    let dragging = false;
+    seek.addEventListener('input', () => {
+      dragging = true;
+      if (np.duration) np.seek((Number(seek.value) / 1000) * np.duration);
+    });
+    seek.addEventListener('change', () => { dragging = false; });
+    const times = root.createDiv('mo-np-times');
+    const at = times.createSpan();
+    const left = times.createSpan();
+
+    const controls = root.createDiv('mo-np-controls');
+    const rate = controls.createEl('button', { cls: 'mo-np-rate', attr: { 'aria-label': t('library.playerRate') } });
+    rate.addEventListener('click', () => np.nextRate());
+    iconButton(controls, 'rotate-ccw', t('library.playerBack'), 'mo-np-back', () => np.back());
+    const play = iconButton(controls, 'play', t('library.menuPlay'), 'mo-np-play', () => np.toggle());
+    iconButton(controls, 'rotate-cw', t('library.playerAhead'), 'mo-np-ahead', () => np.ahead());
+    iconButton(controls, 'square', t('library.stop'), 'mo-np-stop', () => {
+      np.stop();
+      this.close();
+    });
+
+    const actions = root.createDiv('mo-np-actions');
+    const read = actions.createEl('button', { cls: 'mo-np-action', text: t('library.playerReadAlongShort') });
+    setIcon(read.createSpan({ cls: 'mo-np-action-icon', prepend: true }), 'file-text');
+    read.addEventListener('click', () => {
+      this.close();
+      void np.openTranscript();
+    });
+    const keep = actions.createEl('button', { cls: 'mo-np-action mo-np-keep' });
+    keep.addEventListener('click', evt => {
+      const track = np.track;
+      if (!track) return;
+      const e = cache.entry(track.key);
+      if (e?.kind === 'kept' && cache.complete(track.key)) {
+        const menu = new Menu();
+        menu.addItem(i => i.setTitle(t('library.cacheRemove')).setIcon('trash-2').onClick(() => { void cache.remove(track.key); }));
+        menu.showAtMouseEvent(evt);
+      } else if (cache.progress(track.key)?.active && e?.kind === 'kept') {
+        cache.cancel(track.key);
+      } else {
+        cache.keep({ path: track.key, url: track.url, size: track.size });
+      }
+    });
+    const library = actions.createEl('button', { cls: 'mo-np-action', text: t('library.playerShowLibrary') });
+    library.addEventListener('click', () => {
+      this.close();
+      void plugin.openLibrary();
+    });
+
+    const paint = () => {
+      const track = np.track;
+      if (!track) {
+        this.close();
+        return;
+      }
+      title.setText(track.title);
+      subtitle.setText([track.subtitle, np.local ? t('library.playerFromDevice') : ''].filter(Boolean).join(' · '));
+      const [b, n, a] = np.around;
+      before.setText(b);
+      now.setText(np.failed ? t('library.playerOffline') : n);
+      now.toggleClass('is-error', np.failed);
+      after.setText(a);
+      lines.toggle(!!track.transcript || np.failed);
+      read.toggle(!!track.transcript);
+      paintPlay(play, np.playing);
+      const d = np.duration;
+      if (!dragging && d) seek.value = String(Math.round((np.time / d) * 1000));
+      seek.style.setProperty('--mo-progress', `${Number(seek.value) / 10}%`);
+      at.setText(formatDuration(np.time));
+      left.setText(d ? `-${formatDuration(Math.max(0, d - np.time))}` : '');
+      rate.setText(`${np.rate}×`);
+      const e = cache.entry(track.key);
+      const p = cache.progress(track.key);
+      const label = !cache.available ? null
+        : cache.complete(track.key) ? (e?.kind === 'kept' ? t('library.cacheKept') : t('library.cacheKeep'))
+          : p && e?.kind === 'kept' ? t('library.cacheDownloading', { percent: percent(p.have, p.size) })
+            : t('library.cacheDownload');
+      keep.toggle(label !== null);
+      keep.empty();
+      setIcon(keep.createSpan('mo-np-action-icon'), cache.complete(track.key) && e?.kind === 'kept' ? 'check' : 'download');
+      keep.createSpan({ text: label ?? '' });
+      keep.setAttr('title', track.size ? formatSize(track.size) : '');
+    };
+    paint();
+    const offNp = np.subscribe(paint);
+    const offCache = cache.subscribe(paint);
+    this.unsubscribe = () => {
+      offNp();
+      offCache();
+    };
+  }
+
+  onClose(): void {
+    document.body.removeClass('mo-np-open');
+    this.unsubscribe?.();
+    this.contentEl.empty();
+  }
+}
+
+function percent(have: number, size: number): number {
+  return size ? Math.floor((have / size) * 100) : 0;
 }
 
 /**
  * The player away from the library, so what plays can always be paused or
  * stopped: in the status bar on a computer, floating above the navigation bar
- * on a phone (hidden while the library, with its own player, is in view).
- * Tapping what plays opens the library.
+ * on a phone (hidden while the library, with its own bar, is in view). Tap
+ * what plays to open it in full.
  */
 export class MiniPlayer {
   private readonly el: HTMLElement;
-  private readonly play: HTMLButtonElement;
-  private readonly label: HTMLElement;
-  private readonly progress: HTMLElement | null = null;
-  private wasPlaying: boolean | null = null;
+  private readonly bar: { paint: () => void } | null = null;
+  private readonly play: HTMLButtonElement | null = null;
+  private readonly label: HTMLElement | null = null;
 
   constructor(private readonly plugin: MediaTranscriptPlugin, private readonly np: NowPlaying) {
     if (Platform.isMobile) {
-      this.el = document.body.createDiv('mo-mini-player');
-      plugin.register(() => this.el.remove());
+      const bar = renderBar(document.body, plugin, 'mo-mini-player', () => !this.libraryInView());
+      this.el = bar.el;
+      this.bar = bar;
+      plugin.register(bar.remove);
     } else {
       this.el = plugin.addStatusBarItem();
       this.el.addClass('mo-mini-player-status');
+      this.play = iconButton(this.el, 'play', t('library.menuPlay'), 'mo-mini-play', () => np.toggle());
+      this.label = this.el.createDiv('mo-mini-label');
+      this.label.addEventListener('click', () => new NowPlayingModal(plugin).open());
+      iconButton(this.el, 'x', t('library.stop'), 'mo-mini-close', () => np.stop());
     }
-    this.play = iconButton(this.el, 'play', t('library.menuPlay'), 'mo-mini-play', () => np.toggle());
-    this.label = this.el.createDiv('mo-mini-label');
-    this.label.addEventListener('click', () => { void plugin.openLibrary(); });
-    iconButton(this.el, 'x', t('library.stop'), 'mo-mini-close', () => np.stop());
-    if (Platform.isMobile) this.progress = this.el.createDiv('mo-mini-progress');
     plugin.register(np.subscribe(() => this.paint()));
     plugin.registerEvent(plugin.app.workspace.on('layout-change', () => this.paint()));
     plugin.registerEvent(plugin.app.workspace.on('active-leaf-change', () => this.paint()));
@@ -117,22 +247,16 @@ export class MiniPlayer {
   private paint(): void {
     const { np, el } = this;
     const track = np.track;
-    const shown = !!track && !(Platform.isMobile && this.libraryInView());
-    el.toggleClass('is-hidden', !shown);
-    if (!track || !shown) return;
-    if (Platform.isMobile) this.place();
-    if (np.playing !== this.wasPlaying) {
-      this.wasPlaying = np.playing;
-      setIcon(this.play, np.playing ? 'pause' : 'play');
-      this.play.setAttr('aria-label', t(np.playing ? 'library.playerPause' : 'library.menuPlay'));
+    if (this.bar) {
+      this.bar.paint();
+      if (track && !el.hasClass('is-hidden')) this.place();
+      return;
     }
+    el.toggleClass('is-hidden', !track);
+    if (!track) return;
+    if (this.play) paintPlay(this.play, np.playing);
     const d = np.duration;
-    if (this.progress) {
-      this.progress.style.width = d ? `${(np.time / d) * 100}%` : '0';
-      this.label.setText(track.title);
-    } else {
-      this.label.setText(`${track.title} · ${formatDuration(np.time)}${d ? ` / ${formatDuration(d)}` : ''}`);
-    }
+    this.label?.setText(`${track.title} · ${formatDuration(np.time)}${d ? ` / ${formatDuration(d)}` : ''}`);
   }
 
   /**
@@ -141,21 +265,23 @@ export class MiniPlayer {
    */
   private place(): void {
     const nav = document.querySelector('.mobile-navbar')?.getBoundingClientRect();
-    if (!nav || nav.height === 0) return;
     const gap = 8;
-    const bottom = window.innerHeight - nav.top + gap;
-    const top = nav.top - gap - this.el.offsetHeight;
-    let right = window.innerWidth - nav.right;
+    // Above the navigation bar, as wide; a tablet has none: the foot of the screen.
+    const hasNav = !!nav && nav.height > 0;
+    const floor = hasNav ? nav.top : window.innerHeight - 12;
+    const left = hasNav ? nav.left : 12;
+    let right = hasNav ? window.innerWidth - nav.right : 12;
+    const top = floor - gap - this.el.offsetHeight;
     for (const button of Array.from(document.querySelectorAll('.view-actions.mod-raised .view-action'))) {
       const fab = button.getBoundingClientRect();
-      if (fab.width > 0 && fab.bottom > top && fab.top < nav.top - gap) right = Math.max(right, window.innerWidth - fab.left + gap);
+      if (fab.width > 0 && fab.bottom > top && fab.top < floor) right = Math.max(right, window.innerWidth - fab.left + gap);
     }
-    this.el.style.setProperty('--mo-mini-bottom', `${bottom}px`);
-    this.el.style.setProperty('--mo-mini-left', `${nav.left}px`);
+    this.el.style.setProperty('--mo-mini-bottom', `${window.innerHeight - floor + (hasNav ? gap : 0)}px`);
+    this.el.style.setProperty('--mo-mini-left', `${left}px`);
     this.el.style.setProperty('--mo-mini-right', `${right}px`);
   }
 
-  /** The library on screen: its own player is there. */
+  /** The library on screen: its own bar is there. */
   private libraryInView(): boolean {
     const leaf = this.plugin.app.workspace.getLeavesOfType(VIEW_TYPE_LIBRARY)[0];
     if (!leaf) return false;

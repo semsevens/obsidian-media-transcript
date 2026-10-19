@@ -33,6 +33,7 @@ export class LibraryView extends ItemView {
       rename: vaultPath => this.askRename(vaultPath),
       delete: vaultPath => this.askDelete(vaultPath),
       restore: item => this.restore(item),
+      confirm: (heading, body, action, onConfirm) => new ConfirmModal(this.app, heading, body, action, onConfirm, false).open(),
     });
     this.archive = new ArchiveList(plugin, {
       confirm: (heading, body, action, onConfirm) => new ConfirmModal(this.app, heading, body, action, onConfirm).open(),
@@ -79,9 +80,12 @@ export class LibraryView extends ItemView {
     this.listEl = root.createDiv('mo-lib-list');
     // What plays goes on when the library closes: the player in the status bar
     // (or floating, on a phone) is there to stop it.
-    this.register(renderDock(root, this.plugin.nowPlaying));
+    this.register(renderDock(root, this.plugin));
     this.register(this.plugin.nowPlaying.subscribe(() => {
       if (this.tab === 'media') this.media.paintPlaying(this.listEl);
+    }));
+    this.register(this.plugin.cache.subscribe(() => {
+      if (this.tab === 'media') this.media.paintCache(this.listEl);
     }));
     await this.refresh();
   }
@@ -170,7 +174,7 @@ export class RenameModal extends Modal {
 
 export class ConfirmModal extends Modal {
   constructor(app: App, private readonly heading: string, private readonly body: string,
-    private readonly confirm: string, private readonly onConfirm: () => Promise<void>) {
+    private readonly confirm: string, private readonly onConfirm: () => Promise<void>, private readonly warning = true) {
     super(app);
   }
 
@@ -179,10 +183,14 @@ export class ConfirmModal extends Modal {
     this.contentEl.createEl('p', { text: this.body });
     new Setting(this.contentEl)
       .addButton(b => b.setButtonText(t('library.cancel')).onClick(() => this.close()))
-      .addButton(b => b.setButtonText(this.confirm).setWarning().onClick(() => {
-        this.close();
-        void this.onConfirm();
-      }));
+      .addButton(b => {
+        b.setButtonText(this.confirm).onClick(() => {
+          this.close();
+          void this.onConfirm();
+        });
+        if (this.warning) b.setWarning();
+        else b.setCta();
+      });
   }
 }
 
