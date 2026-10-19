@@ -1,5 +1,5 @@
 import {
-  App, Component, Notice, Plugin, TAbstractFile, TFile, Workspace, WorkspaceLeaf, normalizePath, parseLinktext, setIcon,
+  App, Component, Notice, Platform, Plugin, TAbstractFile, TFile, Workspace, WorkspaceLeaf, normalizePath, parseLinktext, setIcon,
 } from 'obsidian';
 import { EmbedCreator, TranscriptCards, embedRegistry } from './embeds';
 import { MediaTranscriptView, VIEW_TYPE_MEDIA_TRANSCRIPT } from './MediaTranscriptView';
@@ -225,7 +225,12 @@ export default class MediaTranscriptPlugin extends Plugin {
       l => l.view instanceof MediaTranscriptView &&
         (l.view.file === file || l.view.getMediaFile() === file),
     );
-    if (!leaf) {
+    if (!leaf && Platform.isMobile) {
+      // In place of the page shown, as a link would: back returns to it.
+      leaf = ws.getLeaf(false);
+      await leaf.openFile(file);
+      if (!(leaf.view instanceof MediaTranscriptView)) await leaf.setViewState({ type: VIEW_TYPE_MEDIA_TRANSCRIPT, state: { file: file.path } });
+    } else if (!leaf) {
       leaf = leaves[0] ?? ws.getLeaf('split', 'vertical');
       await leaf.setViewState({ type: VIEW_TYPE_MEDIA_TRANSCRIPT, state: { file: file.path } });
     }

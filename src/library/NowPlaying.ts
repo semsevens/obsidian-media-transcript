@@ -32,8 +32,10 @@ export class NowPlaying {
 
   constructor(private readonly plugin: MediaTranscriptPlugin) {
     this.device = new DeviceState(plugin.app);
+    // Media events do not bubble, but they pass the document on capture.
     plugin.registerDomEvent(document, 'play', evt => {
       if (this.audio && evt.target !== this.audio && !this.audio.paused) this.audio.pause();
+      pauseAllBut(evt.target);
     }, true);
     plugin.register(() => this.stop());
   }
@@ -78,6 +80,8 @@ export class NowPlaying {
     const audio = (this.audio = new Audio(track.url));
     audio.preload = 'auto';
     audio.playbackRate = this.rate;
+    // Not on the page, so its own start is not seen by the listener above.
+    audio.addEventListener('play', () => pauseAllBut(audio));
     for (const type of ['play', 'pause', 'timeupdate', 'loadedmetadata', 'ratechange']) audio.addEventListener(type, () => this.changed());
     audio.addEventListener('ended', () => this.stop());
     const file = track.transcript;
@@ -164,6 +168,13 @@ export class NowPlaying {
     } catch {
       // not offered here
     }
+  }
+}
+
+/** One sound at a time: pause every other audio or video on the page. */
+function pauseAllBut(playing: EventTarget | null): void {
+  for (const media of Array.from(document.querySelectorAll<HTMLMediaElement>('audio, video'))) {
+    if (media !== playing && !media.paused) media.pause();
   }
 }
 
