@@ -230,6 +230,7 @@ export class MiniPlayer {
       this.el = bar.el;
       this.bar = bar;
       plugin.register(bar.remove);
+      plugin.register(() => this.liftButton(0));
     } else {
       this.el = plugin.addStatusBarItem();
       this.el.addClass('mo-mini-player-status');
@@ -250,6 +251,7 @@ export class MiniPlayer {
     if (this.bar) {
       this.bar.paint();
       if (track && !el.hasClass('is-hidden')) this.place();
+      else this.liftButton(0);
       return;
     }
     el.toggleClass('is-hidden', !track);
@@ -260,25 +262,38 @@ export class MiniPlayer {
   }
 
   /**
-   * On a phone: just above the navigation bar, as wide, and short of the
-   * page's floating button where it would cover it.
+   * On a phone: just above the navigation bar and as wide (a tablet has
+   * none: the foot of the screen). The page's floating button, where the bar
+   * would cover it, moves up above the bar, as a music app's would.
    */
   private place(): void {
     const nav = document.querySelector('.mobile-navbar')?.getBoundingClientRect();
     const gap = 8;
-    // Above the navigation bar, as wide; a tablet has none: the foot of the screen.
     const hasNav = !!nav && nav.height > 0;
     const floor = hasNav ? nav.top : window.innerHeight - 12;
-    const left = hasNav ? nav.left : 12;
-    let right = hasNav ? window.innerWidth - nav.right : 12;
-    const top = floor - gap - this.el.offsetHeight;
-    for (const button of Array.from(document.querySelectorAll('.view-actions.mod-raised .view-action'))) {
-      const fab = button.getBoundingClientRect();
-      if (fab.width > 0 && fab.bottom > top && fab.top < floor) right = Math.max(right, window.innerWidth - fab.left + gap);
-    }
     this.el.style.setProperty('--mo-mini-bottom', `${window.innerHeight - floor + (hasNav ? gap : 0)}px`);
-    this.el.style.setProperty('--mo-mini-left', `${left}px`);
-    this.el.style.setProperty('--mo-mini-right', `${right}px`);
+    this.el.style.setProperty('--mo-mini-left', `${hasNav ? nav.left : 12}px`);
+    this.el.style.setProperty('--mo-mini-right', `${hasNav ? window.innerWidth - nav.right : 12}px`);
+    const top = floor - (hasNav ? gap : 0) - this.el.offsetHeight;
+    let lift = 0;
+    for (const button of Array.from(document.querySelectorAll<HTMLElement>('.view-actions.mod-raised .view-action'))) {
+      const fab = button.getBoundingClientRect();
+      if (fab.width === 0) continue;
+      // Where it is when not moved: less how far it is moved now (midway, as it moves).
+      const moved = getComputedStyle(button).translate;
+      const bottom = fab.bottom - (moved && moved !== 'none' ? parseFloat(moved.split(' ')[1] ?? '0') || 0 : 0);
+      if (bottom > top) lift = Math.max(lift, Math.ceil(bottom - top + gap));
+    }
+    this.liftButton(lift);
+  }
+
+  private lift = 0;
+
+  private liftButton(px: number): void {
+    if (px === this.lift) return;
+    this.lift = px;
+    document.body.toggleClass('mo-fab-lifted', px > 0);
+    document.body.style.setProperty('--mo-fab-lift', `${px}px`);
   }
 
   /** The library on screen: its own bar is there. */

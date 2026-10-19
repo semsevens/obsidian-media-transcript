@@ -1861,6 +1861,16 @@ img.at-flash {
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
 }
 
+/* While it floats, the page's floating button moves up above it. */
+/* translate, not transform: the button's own transform (shown, hidden) is kept. */
+.view-actions.mod-raised .view-action {
+  transition: translate 0.2s ease;
+}
+
+body.mo-fab-lifted .view-actions.mod-raised .view-action {
+  translate: 0 calc(-1 * var(--mo-fab-lift, 0px));
+}
+
 /* On a computer: in the status bar. */
 .mo-mini-player-status {
   gap: var(--size-2-2);
