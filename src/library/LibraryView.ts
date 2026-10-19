@@ -4,6 +4,7 @@ import type { TrashItem } from './client';
 import { deleteMedia, renameMedia, restoreMedia } from './actions';
 import { ArchiveList } from './ArchiveList';
 import { MediaList } from './MediaList';
+import { renderDock } from './PlayerBar';
 import { t } from '../i18n';
 import { formatSize } from '../utils/format';
 
@@ -76,11 +77,13 @@ export class LibraryView extends ItemView {
     }
     this.statusEl = root.createDiv('mo-lib-status');
     this.listEl = root.createDiv('mo-lib-list');
+    // What plays goes on when the library closes: the player in the status bar
+    // (or floating, on a phone) is there to stop it.
+    this.register(renderDock(root, this.plugin.nowPlaying));
+    this.register(this.plugin.nowPlaying.subscribe(() => {
+      if (this.tab === 'media') this.media.paintPlaying(this.listEl);
+    }));
     await this.refresh();
-  }
-
-  async onClose(): Promise<void> {
-    this.media.stop();
   }
 
   async refresh(): Promise<void> {

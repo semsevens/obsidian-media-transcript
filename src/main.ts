@@ -17,6 +17,8 @@ import { LibraryClient } from './library/client';
 import { Uploader } from './library/uploader';
 import { LibraryView, VIEW_TYPE_LIBRARY } from './library/LibraryView';
 import { TranscriptSync } from './library/transcriptSync';
+import { NowPlaying } from './library/NowPlaying';
+import { MiniPlayer } from './library/PlayerBar';
 import { t } from './i18n';
 
 // Subtitle extensions we globally register for click-to-open. Clicking any of
@@ -50,6 +52,7 @@ export default class MediaTranscriptPlugin extends Plugin {
   library!: LibraryClient;
   uploader!: Uploader;
   transcriptSync!: TranscriptSync;
+  nowPlaying!: NowPlaying;
   // The modules' part of data.json, kept beside the settings above.
   private moduleState: ModuleState = { modules: {}, enabledModules: {} };
   // Uploads an earlier version queued in data.json; this device takes them over.
@@ -69,6 +72,8 @@ export default class MediaTranscriptPlugin extends Plugin {
     this.uploader.start();
     this.transcriptSync = new TranscriptSync(this);
     this.transcriptSync.start();
+    this.nowPlaying = new NowPlaying(this);
+    new MiniPlayer(this, this.nowPlaying);
     this.registerView(VIEW_TYPE_LIBRARY, leaf => new LibraryView(leaf, this));
     this.addRibbonIcon('library', t('core.ribbonLibrary'), () => { void this.openLibrary(); });
     this.addCommand({

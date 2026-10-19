@@ -4,7 +4,6 @@ import type { IndexEntry, Job, TrashItem } from './client';
 import { DeviceState } from './deviceState';
 import { durationIn, formatDuration, isDatedName, isGenericName, isTranscriptNamedFor, openingWords, recordedAt, withoutDate } from './mediaInfo';
 import { formatSize } from '../utils/format';
-import { parseSubtitle, type SubtitleSegment } from '../utils/subtitleParser';
 import { obsidianLanguage, t } from '../i18n';
 
 const PAGE = 200;
@@ -66,8 +65,6 @@ export class MediaList {
   private retried = false;
   /** Read from each shown transcript once: the media's length and opening words. */
   private details = new Map<string, { duration: number | null; words: string }>();
-  /** The row playing inline: its audio, its play button, and the bar under it. */
-  private playing: { path: string; row: HTMLElement; audio: HTMLAudioElement; button: HTMLElement; bar: HTMLElement; caption: HTMLElement | null } | null = null;
 
   private readonly device: DeviceState;
 
@@ -231,25 +228,23 @@ export class MediaList {
       list.createDiv({ cls: 'mo-lib-empty', text: filter ? t('library.nothingMatches') : t('library.empty') });
     }
     if (current === this.own && this.collection !== '*') this.renderTrash(list);
-    this.keepPlaying(list);
+    this.paintPlaying(list);
   }
 
-  /** The list was redrawn (a search typed, say): carry on playing in the new row, or stop if it's gone. */
-  private keepPlaying(list: HTMLElement): void {
-    const playing = this.playing;
-    if (!playing) return;
-    const row = Array.from(list.querySelectorAll<HTMLElement>('.mo-lib-media-row')).find(r => r.dataset.path === playing.path);
-    const button = row?.querySelector<HTMLElement>('.mo-lib-play');
-    if (!row || !button) {
-      this.stop();
-      return;
+  /** Show which row is playing, and whether it is paused: after a redraw, and as the player changes. */
+  paintPlaying(list: HTMLElement): void {
+    const np = this.plugin.nowPlaying;
+    const path = np.track?.path;
+    for (const row of Array.from(list.querySelectorAll<HTMLElement>('.mo-lib-media-row'))) {
+      const on = row.dataset.path === path;
+      const icon = on && np.playing ? 'pause' : 'play';
+      row.toggleClass('is-playing', on);
+      const button = row.querySelector<HTMLElement>('.mo-lib-play');
+      if (button && button.dataset.icon !== icon) {
+        button.dataset.icon = icon;
+        setIcon(button, icon);
+      }
     }
-    playing.row = row;
-    playing.button = button;
-    row.addClass('is-playing');
-    setIcon(button, playing.audio.paused ? 'play' : 'pause');
-    if (playing.caption) row.appendChild(playing.caption);
-    row.appendChild(playing.bar);
   }
 
   private renderCollections(list: HTMLElement, counts: Map<string, Item[]>, current: string): void {
@@ -277,7 +272,7 @@ export class MediaList {
     setIcon(playButton, 'play');
     playButton.addEventListener('click', evt => {
       evt.stopPropagation();
-      this.play(it, row, playButton);
+      this.play(it);
     });
     const main = row.createDiv('mo-lib-main');
     const title = main.createDiv({ cls: 'mo-lib-name', text: it.title });
@@ -323,14 +318,14 @@ export class MediaList {
     // The row opens its transcript (which plays it too); the button just plays it here.
     main.addEventListener('click', () => {
       if (it.transcript) void this.plugin.openTranscript(it.transcript);
-      else this.play(it, row, playButton);
+      else this.play(it);
     });
     const more = row.createEl('button', { cls: 'clickable-icon mo-lib-more-actions', attr: { 'aria-label': t('library.moreActions') } });
     setIcon(more, 'more-horizontal');
-    more.addEventListener('click', evt => this.menu(evt, it, row));
+    more.addEventListener('click', evt => this.menu(evt, it));
     row.addEventListener('contextmenu', evt => {
       evt.preventDefault();
-      this.menu(evt, it, row);
+      this.menu(evt, it);
     });
   }
 
@@ -348,10 +343,9 @@ export class MediaList {
     return d;
   }
 
-  private menu(evt: MouseEvent, it: Item, row: HTMLElement): void {
+  private menu(evt: MouseEvent, it: Item): void {
     const menu = new Menu();
-    const button = row.querySelector<HTMLElement>('.mo-lib-play');
-    if (button) menu.addItem(i => i.setTitle(t('library.menuPlay')).setIcon('play').onClick(() => this.play(it, row, button)));
+    menu.addItem(i => i.setTitle(t('library.menuPlay')).setIcon('play').onClick(() => this.play(it)));
     if (it.transcript) {
       const tr = it.transcript;
       menu.addItem(i => i.setTitle(t('library.menuOpenTranscript')).setIcon('file-text').onClick(() => { void this.plugin.openTranscript(tr); }));
@@ -380,83 +374,14 @@ export class MediaList {
     menu.showAtMouseEvent(evt);
   }
 
-  /** Play `it` in its row, or pause and resume it if it is the one playing. */
-  private play(it: Item, row: HTMLElement, button: HTMLElement): void {
-    if (this.playing?.row === row) {
-      const { audio } = this.playing;
-      if (audio.paused) void audio.play().catch(() => {});
-      else audio.pause();
-      return;
-    }
-    this.stop();
-    const audio = new Audio(this.plugin.library.libraryUrl(it.listen ?? it.path));
-    audio.preload = 'auto';
-    const bar = row.createDiv('mo-lib-progress');
-    const seek = bar.createEl('input', { type: 'range', attr: { min: '0', max: '1000', value: '0', 'aria-label': t('library.seek') } });
-    const time = bar.createSpan({ cls: 'mo-lib-progress-time', text: '0:00' });
-    // The line being said, following the playback; tapping it opens the transcript there.
-    const caption = it.transcript ? createDiv({ cls: 'mo-lib-caption' }) : null;
-    if (caption) row.insertBefore(caption, bar);
-    let segments: SubtitleSegment[] = [];
-    let shown = -1;
-    if (it.transcript && caption) {
-      const file = it.transcript;
-      void this.plugin.app.vault.cachedRead(file).then(text => {
-        segments = parseSubtitle(text, file.extension).filter(s => !/^[[(（【].*[\])）】]$/.test(s.text.trim()));
-        paint();
-      });
-      caption.addEventListener('click', evt => {
-        evt.stopPropagation();
-        const at = audio.currentTime;
-        this.stop();
-        void this.plugin.openTranscript(file, at);
-      });
-    }
-    const close = bar.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': t('library.stop') } });
-    setIcon(close, 'x');
-    close.addEventListener('click', () => this.stop());
-    const paint = () => {
-      const d = Number.isFinite(audio.duration) ? audio.duration : 0;
-      if (d) seek.value = String(Math.round((audio.currentTime / d) * 1000));
-      time.setText(d ? `${formatDuration(audio.currentTime)} / ${formatDuration(d)}` : formatDuration(audio.currentTime));
-      seek.style.setProperty('--mo-progress', `${Number(seek.value) / 10}%`);
-      if (caption && segments.length) {
-        const i = lineAt(segments, audio.currentTime);
-        if (i !== shown) {
-          shown = i;
-          caption.setText(i >= 0 ? segments[i].text : '');
-        }
-      }
-    };
-    seek.addEventListener('input', () => {
-      if (Number.isFinite(audio.duration)) audio.currentTime = (Number(seek.value) / 1000) * audio.duration;
-      paint();
+  /** Play `it` in the player, or pause and resume it if it is the one playing. */
+  private play(it: Item): void {
+    this.plugin.nowPlaying.play({
+      path: it.path,
+      url: this.plugin.library.libraryUrl(it.listen ?? it.path),
+      title: (isGenericName(it.name) && this.details.get(it.path)?.words) || it.title,
+      transcript: it.transcript,
     });
-    audio.addEventListener('timeupdate', paint);
-    audio.addEventListener('loadedmetadata', paint);
-    audio.addEventListener('play', () => {
-      if (!this.playing) return;
-      setIcon(this.playing.button, 'pause');
-      this.playing.row.addClass('is-playing');
-    });
-    audio.addEventListener('pause', () => { if (this.playing) setIcon(this.playing.button, 'play'); });
-    audio.addEventListener('ended', () => this.stop());
-    this.playing = { path: it.path, row, audio, button, bar, caption };
-    // It grows by a line or two: keep all of it in sight.
-    window.setTimeout(() => row.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 50);
-    void audio.play().catch(() => { if (this.playing) setIcon(this.playing.button, 'play'); });
-  }
-
-  stop(): void {
-    if (!this.playing) return;
-    const { audio, button, bar, row, caption } = this.playing;
-    this.playing = null;
-    audio.pause();
-    audio.removeAttribute('src');
-    bar.remove();
-    caption?.remove();
-    setIcon(button, 'play');
-    row.removeClass('is-playing');
   }
 
   private async transcribe(vaultPath: string, name: string): Promise<void> {
@@ -483,19 +408,4 @@ export class MediaList {
       restore.addEventListener('click', () => { void this.host.restore(item); });
     }
   }
-}
-
-/** The last line that has started by `t` seconds, or -1 before the first. */
-function lineAt(segments: SubtitleSegment[], t: number): number {
-  let lo = 0;
-  let hi = segments.length - 1;
-  let found = -1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    if (segments[mid].startTime <= t) {
-      found = mid;
-      lo = mid + 1;
-    } else hi = mid - 1;
-  }
-  return found;
 }
