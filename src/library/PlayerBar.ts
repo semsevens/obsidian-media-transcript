@@ -55,6 +55,9 @@ export function renderDock(parent: HTMLElement, np: NowPlaying): () => void {
     const track = np.track;
     dock.toggleClass('is-hidden', !track);
     if (!track) return;
+    // Read once the library is on the page (a phone pads its foot more).
+    const pad = getComputedStyle(parent).paddingBottom;
+    if (pad && pad !== dock.style.getPropertyValue('--mo-dock-pad')) dock.style.setProperty('--mo-dock-pad', pad);
     title.setText(track.title);
     const line = np.line;
     caption.setText(line);
@@ -117,6 +120,7 @@ export class MiniPlayer {
     const shown = !!track && !(Platform.isMobile && this.libraryInView());
     el.toggleClass('is-hidden', !shown);
     if (!track || !shown) return;
+    if (Platform.isMobile) this.place();
     if (np.playing !== this.wasPlaying) {
       this.wasPlaying = np.playing;
       setIcon(this.play, np.playing ? 'pause' : 'play');
@@ -129,6 +133,26 @@ export class MiniPlayer {
     } else {
       this.label.setText(`${track.title} · ${formatDuration(np.time)}${d ? ` / ${formatDuration(d)}` : ''}`);
     }
+  }
+
+  /**
+   * On a phone: just above the navigation bar, as wide, and short of the
+   * page's floating button where it would cover it.
+   */
+  private place(): void {
+    const nav = document.querySelector('.mobile-navbar')?.getBoundingClientRect();
+    if (!nav || nav.height === 0) return;
+    const gap = 8;
+    const bottom = window.innerHeight - nav.top + gap;
+    const top = nav.top - gap - this.el.offsetHeight;
+    let right = window.innerWidth - nav.right;
+    for (const button of Array.from(document.querySelectorAll('.view-actions.mod-raised .view-action'))) {
+      const fab = button.getBoundingClientRect();
+      if (fab.width > 0 && fab.bottom > top && fab.top < nav.top - gap) right = Math.max(right, window.innerWidth - fab.left + gap);
+    }
+    this.el.style.setProperty('--mo-mini-bottom', `${bottom}px`);
+    this.el.style.setProperty('--mo-mini-left', `${nav.left}px`);
+    this.el.style.setProperty('--mo-mini-right', `${right}px`);
   }
 
   /** The library on screen: its own player is there. */

@@ -1749,10 +1749,11 @@ img.at-flash {
 
 .mo-player {
   position: sticky;
-  bottom: calc(-1 * var(--size-4-2));
+  /* down over the library's bottom padding (more on a phone), to its very foot */
+  bottom: calc(-1 * var(--mo-dock-pad, var(--size-4-2)));
   z-index: 2;
-  margin: var(--size-4-2) calc(-1 * var(--size-4-2)) calc(-1 * var(--size-4-2));
-  padding: var(--size-4-2) var(--size-4-3) calc(var(--size-4-2) + env(safe-area-inset-bottom, 0px));
+  margin: var(--size-4-2) calc(-1 * var(--size-4-2)) calc(-1 * var(--mo-dock-pad, var(--size-4-2)));
+  padding: var(--size-4-2) var(--size-4-3);
   border-top: 1px solid var(--background-modifier-border);
   background: var(--background-primary);
   box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.06);
@@ -1839,6 +1840,8 @@ img.at-flash {
   flex: 1;
   min-width: 40px;
   height: 4px;
+  padding: 0;
+  border: none;
   margin: 0 var(--size-4-1);
   border-radius: 2px;
   background: linear-gradient(to right, var(--interactive-accent) var(--mo-progress, 0%), var(--background-modifier-border) var(--mo-progress, 0%));
@@ -1885,9 +1888,9 @@ img.at-flash {
 /* On a phone, away from the library: floating above the navigation bar. */
 .mo-mini-player {
   position: fixed;
-  left: 12px;
-  right: 12px;
-  bottom: calc(var(--mobile-navbar-height, 52px) + env(safe-area-inset-bottom, 0px) + 10px);
+  left: var(--mo-mini-left, 12px);
+  right: var(--mo-mini-right, 12px);
+  bottom: var(--mo-mini-bottom, calc(var(--mobile-navbar-height, 52px) + env(safe-area-inset-bottom, 0px) + 10px));
   z-index: var(--layer-status-bar, 15);
   display: flex;
   align-items: center;
