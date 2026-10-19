@@ -32,6 +32,7 @@ export interface Job {
   force?: boolean;       // asked for again: its transcripts replace the vault's
   sourceUrl?: string;    // an archived video's: the link it was archived from
   title?: string;        // an archived video's: the note it was asked from, to name its transcript
+  shared?: boolean;      // a collection's (not a vault's): any vault may take its transcripts
   created: number;       // seconds since the epoch, server time
   finished?: number | null;
   changed: number;
@@ -148,6 +149,11 @@ export class LibraryClient {
   /** A text file of this vault from the server (a transcript). */
   text(vaultPath: string): Promise<string> {
     return this.fetchText(this.url(vaultPath));
+  }
+
+  /** A text file anywhere in the library, by its library path (a collection's transcript). */
+  libraryText(path: string): Promise<string> {
+    return this.fetchText(this.libraryUrl(path));
   }
 
   /** A transcript of an archived video, by its file name (<sha1>.<model>.json). */

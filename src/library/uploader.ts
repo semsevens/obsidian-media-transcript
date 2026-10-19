@@ -92,7 +92,7 @@ export class Uploader {
     if (!this.enabled()) return 0;
     const since = this.since();
     const fresh = this.plugin.app.vault.getFiles().filter(f =>
-      this.plugin.isMedia(f) && f.stat.ctime >= since && !this.pending.includes(f.path));
+      this.wanted(f) && f.stat.ctime >= since && !this.pending.includes(f.path));
     if (fresh.length === 0) return 0;
     let onServer: Set<string>;
     try {
@@ -105,12 +105,17 @@ export class Uploader {
     return missing.length;
   }
 
+  /** A recording or video of the vault's own, not a copy kept by the web archive. */
+  private wanted(file: TFile): boolean {
+    return this.plugin.isMedia(file) && !isArchiveCopy(file.path);
+  }
+
   private enabled(): boolean {
     return this.plugin.settings.uploadNewMedia && this.plugin.library.configured;
   }
 
   private added(file: TAbstractFile): void {
-    if (!(file instanceof TFile) || !this.plugin.isMedia(file) || !this.enabled()) return;
+    if (!(file instanceof TFile) || !this.wanted(file) || !this.enabled()) return;
     void this.enqueue(file.path);
   }
 
@@ -228,4 +233,13 @@ export class Uploader {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => window.setTimeout(resolve, ms));
+}
+
+/**
+ * A web archive copy (<bucket>/<sha1 of its URL>.<ext>, in the vault's archive
+ * folder or another device's seen through a synced or linked folder): it lives
+ * in the server's archive already, and is no recording.
+ */
+export function isArchiveCopy(path: string): boolean {
+  return /(^|\/)([0-9a-f]{2})\/\2[0-9a-f]{38}\.[^./]+$/.test(path);
 }

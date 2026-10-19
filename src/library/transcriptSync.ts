@@ -80,6 +80,7 @@ export class TranscriptSync {
   /** Write the job's transcripts the vault doesn't have yet; returns how many. */
   private async bring(job: Job): Promise<number> {
     if (job.path.startsWith('_archive/')) return this.bringArchived(job);
+    if (job.shared) return this.bringShared(job);
     const { vault } = this.plugin.app;
     const vaultPath = job.path.slice(job.path.indexOf('/') + 1);
     const dir = vaultPath.includes('/') ? vaultPath.slice(0, vaultPath.lastIndexOf('/')) : '';
@@ -98,6 +99,38 @@ export class TranscriptSync {
       }
       const text = await this.plugin.library.text(target);
       if (dir && !vault.getAbstractFileByPath(dir)) await vault.createFolder(dir);
+      if (vault.getAbstractFileByPath(target)) continue;  // arrived meanwhile (Sync)
+      await vault.create(target, text);
+      n++;
+    }
+    return n;
+  }
+
+  /**
+   * A collection's transcripts (a recording brought in from iCloud, not
+   * uploaded from this vault) go where this vault keeps that collection's
+   * other transcripts: a folder named after it (raw/media/工作). A vault
+   * without one doesn't keep that collection's transcripts, and gets none.
+   */
+  private async bringShared(job: Job): Promise<number> {
+    const { vault } = this.plugin.app;
+    const collection = job.path.slice(0, job.path.indexOf('/'));
+    const folder = collectionFolder(vault.getAllFolders(), collection);
+    if (!folder) return 0;
+    const serverDir = job.path.slice(0, job.path.lastIndexOf('/'));
+    let n = 0;
+    for (const name of job.outputs) {
+      const target = normalizePath(`${folder}/${name}`);
+      const existing = vault.getAbstractFileByPath(target);
+      if (existing instanceof TFile && !job.force) continue;
+      const text = await this.plugin.library.libraryText(`${serverDir}/${name}`);
+      if (existing instanceof TFile) {
+        if (text !== await vault.read(existing)) {
+          await vault.modify(existing, text);
+          n++;
+        }
+        continue;
+      }
       if (vault.getAbstractFileByPath(target)) continue;  // arrived meanwhile (Sync)
       await vault.create(target, text);
       n++;
@@ -145,4 +178,22 @@ export class TranscriptSync {
 export function archivedTitle(title: string | undefined, hash: string): string {
   const clean = (title ?? '').replace(/[\\/:*?"<>|#^[\]]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80).trim();
   return clean ? `${clean} · ${hash.slice(0, 6)}` : hash.slice(0, 12);
+}
+
+/**
+ * Where a vault keeps a collection's transcripts: the folder named after it
+ * that holds the most transcripts, or null if no such folder holds any.
+ */
+export function collectionFolder(folders: { name: string; path: string; children: { name: string }[] }[], collection: string): string | null {
+  let best: string | null = null;
+  let most = 0;
+  for (const f of folders) {
+    if (f.name !== collection) continue;
+    const n = f.children.filter(c => /\.[^.]+\.json$/.test(c.name) && !c.name.endsWith('.anno.json')).length;
+    if (n > most) {
+      most = n;
+      best = f.path;
+    }
+  }
+  return best;
 }
