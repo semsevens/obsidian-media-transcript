@@ -289,8 +289,9 @@ export class MediaList {
       this.host.rerender();
     });
     const missing = inView.filter(it => !cache.complete(this.played(it)));
-    if (missing.length && !this.offlineOnly) {
-      const size = missing.reduce((n, it) => n + this.fetchable(it).size, 0);
+    const size = missing.reduce((n, it) => n + this.fetchable(it).size, 0);
+    // Only a group that fits in what this device keeps: a larger one is downloaded a row at a time.
+    if (missing.length && !this.offlineOnly && cache.usage().total + size <= cache.limit) {
       const all = bar.createEl('button', { cls: 'mo-lib-chip', text: t('library.downloadAll', { count: missing.length, size: formatSize(size) }) });
       all.addEventListener('click', () => this.host.confirm(
         t('library.downloadAllTitle', { count: missing.length }),
