@@ -1,7 +1,7 @@
 {
 	"id": "media-transcript",
 	"name": "Media One",
-	"version": "2.9.0",
+	"version": "2.9.1",
 	"minAppVersion": "1.7.2",
 	"description": "Your vault's media in one place: play audio and video with clickable transcripts, highlight and comment on notes, PDFs and transcripts, archive web images, and play hotlink-protected media.",
 	"author": "semsevens",
