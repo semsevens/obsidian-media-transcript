@@ -132,13 +132,19 @@ describe('uploadInPieces', () => {
     expect(w.closed).toBe(true);
   });
 
-  it('sends no more than one piece beside the ones on their way once one had to be sent again', async () => {
-    const server = fakeServer({ failures: new Map([[0, [503]]]) });
+  it('sends one piece at a time once one had to be sent again', async () => {
+    const server = fakeServer();
     const send = server.client.uploadPiece.bind(server.client);
     let inFlight = 0;
+    let failed = false;
     const startedWith: number[] = [];
     const order: number[] = [];
     server.client.uploadPiece = async (id, offset, data, sha) => {
+      // The first piece fails at once, before the others are all on their way.
+      if (offset === 0 && !failed) {
+        failed = true;
+        throw Object.assign(new Error('HTTP 503'), { status: 503 });
+      }
       inFlight++;
       startedWith.push(inFlight);
       order.push(offset / PIECE);
@@ -150,11 +156,10 @@ describe('uploadInPieces', () => {
     };
     await uploadInPieces(server.client, () => server.client.uploadBegin('a.mp4', file.length), file.length, streamed([]));
     expect(same(server.joined(), file)).toBe(true);
-    // Before the failure, several at once; the pieces begun after it (0 sent again), each alone.
-    expect(Math.max(...startedWith)).toBeGreaterThan(1);
-    const after = startedWith.slice(order.lastIndexOf(0) + 1);
-    expect(after.length).toBeGreaterThan(0);
-    expect(after.every(n => n === 1)).toBe(true);
+    // The first three set off together (0 failing at once); every later one, alone.
+    const later = order.map((p, i) => [p, startedWith[i]]).filter(([p]) => p >= 3);
+    expect(later.map(([p]) => p).sort()).toEqual([3, 4, 5]);
+    expect(later.every(([, n]) => n === 1)).toBe(true);
   });
 
   it('gives up after five failures in a row', async () => {
