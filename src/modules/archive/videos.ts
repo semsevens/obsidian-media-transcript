@@ -7,7 +7,7 @@ import { archiveName, resolve } from "./resolver";
 import { extractUrls } from "./scanner";
 import { storeFor } from "./store";
 import { formatSize } from "../../utils/format";
-import { streamSource, uploadInPieces } from "../../library/pieceUpload";
+import { ASK_PIECE, streamSource, uploadInPieces } from "../../library/pieceUpload";
 import { t } from "../../i18n";
 
 // Kept whole in memory on its way, a video is limited to what a phone can hold.
@@ -287,7 +287,7 @@ export class VideoEmbeds {
 			if (offset > 0 && r.status !== 206) throw new Error("the site won't send part of the video");
 			return r.body;
 		});
-		await uploadInPieces(library, () => library.uploadBeginArchive(archiveName(url), url, size), size, source, onProgress);
+		await uploadInPieces(library, () => library.uploadBeginArchive(archiveName(url), url, size, ASK_PIECE), size, source, onProgress);
 	}
 
 	async downloadAll(file: TFile): Promise<void> {

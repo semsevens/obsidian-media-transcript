@@ -2,7 +2,7 @@ import { FileSystemAdapter, Notice, Platform, TAbstractFile, TFile } from 'obsid
 import type MediaTranscriptPlugin from '../main';
 import { sha256Hex } from './client';
 import { DeviceState } from './deviceState';
-import { streamSource, uploadInPieces, type PieceSource } from './pieceUpload';
+import { ASK_PIECE, streamSource, uploadInPieces, type PieceSource } from './pieceUpload';
 import { fileSource } from './streamUpload';
 import { t } from '../i18n';
 
@@ -11,8 +11,27 @@ const SETTLE_MS = 3000;
 const RETRY_MS = 10 * 60_000;
 // Up to this, a file is read whole and sent in one request. Larger, it is
 // sent a piece at a time, read from disk (desktop) or as a stream (phone),
-// and carried on after a break.
-const STREAM_FROM = 64 * 1024 * 1024;
+// and carried on after a break: over a slow line (some 50 KB/s through a
+// relay) even a few minutes' recording takes long enough to want that.
+const STREAM_FROM = 8 * 1024 * 1024;
+/** After a failed try, the next comes sooner than the 10-minute round: a line that dropped is often back in a minute. */
+const BACKOFF_MS = [30_000, 60_000, 120_000, 300_000];
+
+/** What is being uploaded, for the status bar and the library to show. */
+export interface UploadStatus {
+  name: string;
+  size: number;
+  sent: number;
+  /** Bytes a second, over the last half minute or so; 0 until known. */
+  rate: number;
+  /** When the last piece went in (or the upload began). */
+  moved: number;
+  /** Sending; all sent, the server checking it; or waiting to try again at `retryAt`. */
+  state: 'sending' | 'checking' | 'waiting';
+  retryAt?: number;
+  /** Files still waiting after this one. */
+  queued: number;
+}
 
 /**
  * Uploads media added to the vault to the Media One server, so it is on the
@@ -34,6 +53,10 @@ export class Uploader {
   private readonly device: DeviceState;
   /** Vault paths this device still has to upload. */
   readonly pending: string[];
+  status: UploadStatus | null = null;
+  private readonly listeners = new Set<() => void>();
+  private failures = 0;
+  private retryTimer = 0;
 
   constructor(private readonly plugin: MediaTranscriptPlugin) {
     this.device = new DeviceState(plugin.app);
@@ -48,13 +71,26 @@ export class Uploader {
     this.keep();
   }
 
+  subscribe(fn: () => void): () => void {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+
+  private show(status: UploadStatus | null): void {
+    this.status = status;
+    for (const fn of this.listeners) fn();
+  }
+
   private keep(): void {
     this.device.set('pendingUploads', this.pending);
   }
 
   start(): void {
     const { plugin } = this;
-    plugin.register(() => this.stopping.abort());
+    plugin.register(() => {
+      this.stopping.abort();
+      window.clearTimeout(this.retryTimer);
+    });
     // Registered once the vault is loaded, so the existing files don't all count as new.
     plugin.app.workspace.onLayoutReady(() => {
       plugin.registerEvent(plugin.app.vault.on('create', f => this.added(f)));
@@ -145,15 +181,27 @@ export class Uploader {
   async flush(): Promise<void> {
     if (this.running || !this.enabled() || this.pending.length === 0 || this.stopping.signal.aborted) return;
     this.running = true;
+    window.clearTimeout(this.retryTimer);
+    let failed = false;
     try {
       for (const path of [...this.pending]) {
         const outcome = await this.uploadOne(path);
-        if (outcome === 'retry') break;
+        if (outcome === 'retry') {
+          failed = true;
+          break;
+        }
+        this.failures = 0;
         this.forget(path);
       }
     } finally {
       this.running = false;
     }
+    if (!failed || this.stopping.signal.aborted) return this.show(null);
+    // Not through: try again before long, then less often, up to the 10-minute round.
+    const delay = BACKOFF_MS[Math.min(this.failures++, BACKOFF_MS.length - 1)];
+    this.retryTimer = window.setTimeout(() => void this.flush(), delay);
+    const waiting = this.status;
+    this.show(waiting && { ...waiting, state: 'waiting', rate: 0, retryAt: Date.now() + delay });
   }
 
   /** 'done' (stored, already there, or nothing to do) or 'retry' later. */
@@ -164,38 +212,42 @@ export class Uploader {
     if (!(await this.settled(file))) return 'retry';
     const adapter = vault.adapter;
     const large = file.stat.size > STREAM_FROM;
+    const size = file.stat.size;
+    const status: UploadStatus = { name: file.name, size, sent: 0, rate: 0, moved: Date.now(), state: 'sending', queued: Math.max(0, this.pending.length - 1) };
+    this.show(status);
     try {
       let stored: boolean;
       if (large) {
-        const size = file.stat.size;
-        const progress = new Notice(t('library.uploading', { name: file.name, percent: 0 }), 0);
+        // The rate over the last half minute or so: when the bar last moved, from where.
+        const marks: Array<[number, number]> = [];
         let shown = -1;
         const onProgress = (sent: number) => {
-          const percent = Math.floor((sent / size) * 100);
-          if (percent === shown) return;
+          const now = Date.now();
+          marks.push([now, sent]);
+          while (marks.length > 2 && now - marks[1][0] > 30_000) marks.shift();
+          const [t0, s0] = marks[0];
+          const rate = now - t0 > 2000 && sent > s0 ? ((sent - s0) / (now - t0)) * 1000 : status.rate;
+          const percent = Math.floor((sent / size) * 1000);
+          if (percent === shown && rate === status.rate) return;
           shown = percent;
           // All sent: the server puts the pieces together and checks the file.
-          progress.setMessage(percent >= 100 ? t('library.uploadChecking', { name: file.name }) : t('library.uploading', { name: file.name, percent }));
+          this.show(Object.assign(status, { sent, rate, moved: now, state: sent >= size ? 'checking' : 'sending' }));
         };
-        try {
-          let source: PieceSource;
-          if (Platform.isDesktopApp && adapter instanceof FileSystemAdapter) {
-            source = await fileSource(adapter.getFullPath(file.path));
-          } else {
-            // The app serves vault files with ranges: read from where a piece starts, as a stream.
-            const url = vault.getResourcePath(file);
-            source = streamSource(async offset => {
-              const r = await fetch(url, { headers: { Range: `bytes=${offset}-` } });
-              if (!r.ok || !r.body) throw new Error(`can't read ${file.path} (${r.status})`);
-              if (offset > 0 && r.status !== 206) throw new Error(`can't read ${file.path} from the middle`);
-              return r.body;
-            });
-          }
-          const library = this.plugin.library;
-          stored = await uploadInPieces(library, () => library.uploadBegin(file.path, size), size, source, onProgress, this.stopping.signal);
-        } finally {
-          progress.hide();
+        let source: PieceSource;
+        if (Platform.isDesktopApp && adapter instanceof FileSystemAdapter) {
+          source = await fileSource(adapter.getFullPath(file.path));
+        } else {
+          // The app serves vault files with ranges: read from where a piece starts, as a stream.
+          const url = vault.getResourcePath(file);
+          source = streamSource(async offset => {
+            const r = await fetch(url, { headers: { Range: `bytes=${offset}-` } });
+            if (!r.ok || !r.body) throw new Error(`can't read ${file.path} (${r.status})`);
+            if (offset > 0 && r.status !== 206) throw new Error(`can't read ${file.path} from the middle`);
+            return r.body;
+          });
         }
+        const library = this.plugin.library;
+        stored = await uploadInPieces(library, () => library.uploadBegin(file.path, size, ASK_PIECE), size, source, onProgress, this.stopping.signal);
       } else {
         const data = await vault.readBinary(file);
         stored = await this.plugin.library.upload(file.path, data, await sha256Hex(data));

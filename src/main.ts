@@ -15,6 +15,7 @@ import type ArchiveRedirectPlugin from './modules/archive/main';
 import { applyServer, normalizeServer, type Source } from './utils/server';
 import { LibraryClient } from './library/client';
 import { Uploader } from './library/uploader';
+import { UploadIndicator } from './library/UploadStatus';
 import { LibraryView, VIEW_TYPE_LIBRARY } from './library/LibraryView';
 import { TranscriptSync } from './library/transcriptSync';
 import { NowPlaying } from './library/NowPlaying';
@@ -74,6 +75,7 @@ export default class MediaTranscriptPlugin extends Plugin {
     this.uploader = new Uploader(this);
     this.uploader.adopt(this.legacyPending);
     this.uploader.start();
+    new UploadIndicator(this);
     this.transcriptSync = new TranscriptSync(this);
     this.transcriptSync.start();
     this.cache = new MediaCache(() => this.settings.serverUrl);

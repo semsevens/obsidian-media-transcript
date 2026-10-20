@@ -5,6 +5,7 @@ import { deleteMedia, renameMedia, restoreMedia } from './actions';
 import { ArchiveList } from './ArchiveList';
 import { MediaList } from './MediaList';
 import { renderDock, renderPlaylist } from './PlayerBar';
+import { renderUploadRow } from './UploadStatus';
 import { t } from '../i18n';
 import { formatSize } from '../utils/format';
 
@@ -77,6 +78,7 @@ export class LibraryView extends ItemView {
         this.renderList();
       });
     }
+    this.register(renderUploadRow(root, this.plugin));
     this.statusEl = root.createDiv('mo-lib-status');
     this.listEl = root.createDiv('mo-lib-list');
     // What plays goes on when the library closes: the player in the status bar

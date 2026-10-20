@@ -2436,3 +2436,83 @@ body.mo-fab-lifted .view-actions.mod-raised .view-action {
   opacity: 0.45;
 }
 
+
+/* An upload under way: a small item in the status bar, a row atop the library. */
+.mo-upload-status {
+  gap: var(--size-2-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.mo-upload-status.is-hidden,
+.mo-lib-upload.is-hidden {
+  display: none;
+}
+
+.mo-upload-status-icon {
+  display: flex;
+}
+
+.mo-upload-status-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.mo-upload-status.is-waiting {
+  color: var(--text-warning);
+}
+
+.mo-lib-upload {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  margin: var(--size-4-2) 0 0;
+  padding: var(--size-4-2) var(--size-4-3);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+
+.mo-lib-upload-icon {
+  display: flex;
+  color: var(--interactive-accent);
+}
+
+.mo-lib-upload.is-waiting .mo-lib-upload-icon {
+  color: var(--text-warning);
+}
+
+.mo-lib-upload-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.mo-lib-upload-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-ui-small);
+}
+
+.mo-lib-upload-track {
+  height: 4px;
+  margin: 6px 0 4px;
+  border-radius: 2px;
+  background: var(--background-modifier-border);
+  overflow: hidden;
+}
+
+.mo-lib-upload-fill {
+  height: 100%;
+  width: calc(var(--mo-upload, 0) * 100%);
+  background: var(--interactive-accent);
+  transition: width 0.4s ease;
+}
+
+.mo-lib-upload.is-waiting .mo-lib-upload-fill {
+  background: var(--text-warning);
+}
+
+.mo-lib-upload-detail {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+}

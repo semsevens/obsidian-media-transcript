@@ -116,17 +116,49 @@ describe('uploadInPieces', () => {
     expect(same(server.joined(), file)).toBe(true);
   });
 
-  it('gives up on a piece the server refuses, without finishing, and closes the file', async () => {
+  it('sends a piece again that reached the server cut short (400: the line dropped midway)', async () => {
     const server = fakeServer({ failures: new Map([[PIECE, [400]]]) });
+    await uploadInPieces(server.client, () => server.client.uploadBegin('a.mp4', file.length), file.length, streamed([]));
+    expect(server.sentOffsets.filter(o => o === PIECE)).toHaveLength(2);
+    expect(same(server.joined(), file)).toBe(true);
+  });
+
+  it('gives up on a piece the server refuses, without finishing, and closes the file', async () => {
+    const server = fakeServer({ failures: new Map([[PIECE, [413]]]) });
     const w = watched(streamed([]));
-    await expect(uploadInPieces(server.client, () => server.client.uploadBegin('a.mp4', file.length), file.length, w.source)).rejects.toThrow('HTTP 400');
+    await expect(uploadInPieces(server.client, () => server.client.uploadBegin('a.mp4', file.length), file.length, w.source)).rejects.toThrow('HTTP 413');
     expect(server.sentOffsets.filter(o => o === PIECE)).toHaveLength(1);  // not tried again
     expect(server.finished).toBe(false);
     expect(w.closed).toBe(true);
   });
 
-  it('gives up after three failures in a row', async () => {
-    const server = fakeServer({ failures: new Map([[0, [500, 500, 500]]]) });
+  it('sends no more than one piece beside the ones on their way once one had to be sent again', async () => {
+    const server = fakeServer({ failures: new Map([[0, [503]]]) });
+    const send = server.client.uploadPiece.bind(server.client);
+    let inFlight = 0;
+    const startedWith: number[] = [];
+    const order: number[] = [];
+    server.client.uploadPiece = async (id, offset, data, sha) => {
+      inFlight++;
+      startedWith.push(inFlight);
+      order.push(offset / PIECE);
+      try {
+        await send(id, offset, data, sha);
+      } finally {
+        inFlight--;
+      }
+    };
+    await uploadInPieces(server.client, () => server.client.uploadBegin('a.mp4', file.length), file.length, streamed([]));
+    expect(same(server.joined(), file)).toBe(true);
+    // Before the failure, several at once; the pieces begun after it (0 sent again), each alone.
+    expect(Math.max(...startedWith)).toBeGreaterThan(1);
+    const after = startedWith.slice(order.lastIndexOf(0) + 1);
+    expect(after.length).toBeGreaterThan(0);
+    expect(after.every(n => n === 1)).toBe(true);
+  });
+
+  it('gives up after five failures in a row', async () => {
+    const server = fakeServer({ failures: new Map([[0, [500, 500, 500, 500, 500]]]) });
     await expect(uploadInPieces(server.client, () => server.client.uploadBegin('a.mp4', file.length), file.length, streamed([]))).rejects.toThrow('HTTP 500');
     expect(server.finished).toBe(false);
   });

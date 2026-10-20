@@ -177,14 +177,14 @@ export class LibraryClient {
    * Begin (or take up again) an upload in pieces: its id, the piece size and
    * the pieces already there (by offset), or the file if the server has it.
    */
-  async uploadBegin(vaultPath: string, size: number): Promise<{ id: string; piece: number; have: number[] } | { entry: unknown }> {
-    const r = await this.call('POST', 'upload/begin', JSON.stringify({ vault: this.vault(), path: vaultPath, size }), 'application/json');
+  async uploadBegin(vaultPath: string, size: number, piece?: number): Promise<{ id: string; piece: number; have: number[] } | { entry: unknown }> {
+    const r = await this.call('POST', 'upload/begin', JSON.stringify({ vault: this.vault(), path: vaultPath, size, piece }), 'application/json');
     return r.json as { id: string; piece: number; have: number[] } | { entry: unknown };
   }
 
   /** Begin an upload in pieces into the web archive (`name`: <bucket>/<sha1>.<ext>), saved from `source`. */
-  async uploadBeginArchive(name: string, source: string, size: number): Promise<{ id: string; piece: number; have: number[] } | { entry: unknown }> {
-    const r = await this.call('POST', 'upload/begin', JSON.stringify({ archive: name, source, size }), 'application/json');
+  async uploadBeginArchive(name: string, source: string, size: number, piece?: number): Promise<{ id: string; piece: number; have: number[] } | { entry: unknown }> {
+    const r = await this.call('POST', 'upload/begin', JSON.stringify({ archive: name, source, size, piece }), 'application/json');
     return r.json as { id: string; piece: number; have: number[] } | { entry: unknown };
   }
 

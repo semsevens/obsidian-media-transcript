@@ -2,15 +2,23 @@ import type { LibraryClient } from './client';
 
 /** Pieces of 8 MB, unless the server says otherwise: little to hold, few requests. */
 export const PIECE = 8 * 1024 * 1024;
+/**
+ * What a device asks for when it begins an upload: 2 MB. Over a slow line (a
+ * relay, some 50 KB/s) a piece then goes in under a minute, so one cut off
+ * costs little and the progress moves; on a fast one the requests are still few.
+ */
+export const ASK_PIECE = 2 * 1024 * 1024;
 /** Pieces on their way at once: enough to keep the line busy while the server writes. */
 const PARALLEL = 3;
-const TRIES = 3;
+const TRIES = 5;
 /**
  * A piece not answered by then is taken for lost and sent again: a request on
  * a network that stalled (a VPN coming back) may never answer, and would hold
  * up every upload behind it. The server takes a piece sent twice in its stride.
+ * Three minutes, or longer for a big piece: as long as it takes at 16 KB/s.
  */
 const PIECE_TIMEOUT_MS = 3 * 60_000;
+const SLOWEST = 16 * 1024;
 
 /** Where the pieces are read from. */
 export interface PieceSource {
@@ -81,6 +89,9 @@ async function sendMissing(
 
   const inFlight = new Set<Promise<void>>();
   const failed: { error?: Error } = {};
+  // A piece that had to be sent again means the line can't carry several at
+  // once: one at a time from then on, rather than each crowding out the others.
+  const line = { parallel: PARALLEL };
   for (const offset of missing) {
     if (failed.error) break;
     // Stopped (the plugin unloaded): what arrived stays on the server for next time.
@@ -90,7 +101,7 @@ async function sendMissing(
     }
     const length = Math.min(piece, size - offset);
     const data = await source.read(offset, length);
-    const task = sendPiece(client, begun.id, offset, data).then(
+    const task = sendPiece(client, begun.id, offset, data, () => { line.parallel = 1; }).then(
       () => {
         sent += length;
         onProgress?.(sent);
@@ -99,7 +110,7 @@ async function sendMissing(
     );
     inFlight.add(task);
     void task.finally(() => inFlight.delete(task));
-    if (inFlight.size >= PARALLEL) await Promise.race(inFlight);
+    while (inFlight.size >= line.parallel) await Promise.race(inFlight);
   }
   await Promise.all(inFlight);
   if (failed.error) throw failed.error;
@@ -119,17 +130,24 @@ async function finish(client: LibraryClient, id: string): Promise<void> {
   }
 }
 
-/** One piece, tried again on a passing failure. */
-async function sendPiece(client: LibraryClient, id: string, offset: number, data: ArrayBuffer): Promise<void> {
+/**
+ * One piece, tried again on a passing failure. That includes a 400: the
+ * server answers so when a piece reaches it cut short or spoiled (the line
+ * dropped midway), and the same piece sent again goes in. An upload it no
+ * longer knows (404) or a piece it won't take (413) is no passing failure.
+ */
+async function sendPiece(client: LibraryClient, id: string, offset: number, data: ArrayBuffer, retried?: () => void): Promise<void> {
   const digest = await sha256Hex(data);
+  const timeout = Math.max(PIECE_TIMEOUT_MS, (data.byteLength / SLOWEST) * 1000);
   for (let attempt = 1; ; attempt++) {
     try {
-      await withTimeout(client.uploadPiece(id, offset, data, digest), PIECE_TIMEOUT_MS);
+      await withTimeout(client.uploadPiece(id, offset, data, digest), timeout);
       return;
     } catch (e) {
       const status = (e as { status?: number }).status ?? 0;
-      if (attempt >= TRIES || (status >= 400 && status < 500)) throw e;
-      await new Promise(r => window.setTimeout(r, 1000 * attempt));
+      if (attempt >= TRIES || (status > 400 && status < 500)) throw e;
+      retried?.();
+      await new Promise(r => window.setTimeout(r, 2000 * attempt));
     }
   }
 }
