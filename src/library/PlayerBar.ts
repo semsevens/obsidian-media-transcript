@@ -226,19 +226,27 @@ export class NowPlayingModal extends Modal {
     });
     const keepLabel = keep.createSpan('mo-np-keep-label');
 
-    const coverSlot = root.createDiv('mo-np-cover');
+    // What it is: a small cover, the title, where it is from.
+    const head = root.createDiv('mo-np-head');
+    const coverSlot = head.createDiv('mo-np-cover');
     let coverFor = '';
-    const title = root.createDiv('mo-np-title');
-    const subtitle = root.createDiv('mo-np-subtitle');
+    const names = head.createDiv('mo-np-names');
+    const title = names.createDiv('mo-np-title');
+    const subtitle = names.createDiv('mo-np-subtitle');
 
-    const seekRow = root.createDiv('mo-np-seekrow');
-    const at = seekRow.createSpan('mo-np-at');
-    const line = seekRow.createDiv('mo-np-line');
-    line.setAttr('aria-label', t('library.playerReadAlong'));
-    line.addEventListener('click', () => {
+    // Most of the room: what is being said, and around it. Tap to read along.
+    const lyrics = root.createDiv('mo-np-lyrics');
+    lyrics.setAttr('aria-label', t('library.playerReadAlong'));
+    lyrics.addEventListener('click', () => {
       this.close();
       void np.openTranscript();
     });
+    const lines = [0, 1, 2, 3, 4].map(i => lyrics.createDiv(`mo-np-lyric${i === 2 ? ' is-now' : i === 1 || i === 3 ? ' is-near' : ''}`));
+    const line = lines[2];
+
+    const seekRow = root.createDiv('mo-np-seekrow');
+    const at = seekRow.createSpan('mo-np-at');
+    seekRow.createDiv('mo-np-top-gap');
     const left = seekRow.createSpan('mo-np-left');
     const wave = renderWave(root, np);
 
@@ -282,12 +290,15 @@ export class NowPlayingModal extends Modal {
       if (coverFor !== track.subtitle) {
         coverFor = track.subtitle;
         coverSlot.empty();
-        renderCover(coverSlot, track.subtitle, 'is-large');
+        renderCover(coverSlot, track.subtitle, 'is-medium');
       }
       title.setText(track.title);
       subtitle.setText([track.subtitle, np.local ? t('library.playerFromDevice') : ''].filter(Boolean).join(' · '));
-      line.setText(np.failed ? t('library.playerOffline') : np.line);
+      const { text } = np.lines(2, 2);
+      lines.forEach((el, i) => el.setText(text[i]));
+      if (np.failed) line.setText(t('library.playerOffline'));
       line.toggleClass('is-error', np.failed);
+      lyrics.toggleClass('is-empty', !track.transcript && !np.failed);
       read.toggle(!!track.transcript);
       paintPlay(play, np.playing);
       const d = np.duration;

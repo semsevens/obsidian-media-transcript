@@ -75,6 +75,14 @@ export class NowPlaying {
     return i >= 0 ? this.segments[i].text : '';
   }
 
+  /** `before` lines before the one being said, it, and `after` lines after ('' where there is none); and which is it. */
+  lines(before: number, after: number): { text: string[]; now: number } {
+    const i = lineAt(this.segments, this.time);
+    const text: string[] = [];
+    for (let j = i - before; j <= i + after; j++) text.push(j >= 0 ? this.segments[j]?.text ?? '' : '');
+    return { text, now: before };
+  }
+
   /** The line before, the line being said, the line after ('' where there is none). */
   get around(): [string, string, string] {
     const i = lineAt(this.segments, this.time);
