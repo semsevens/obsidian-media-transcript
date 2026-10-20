@@ -4,6 +4,7 @@ import { DeviceState } from './deviceState';
 import { parseSubtitle, type SubtitleSegment } from '../utils/subtitleParser';
 import { resumeAt } from './cachePolicy';
 import type { QueueEntry } from './playlist';
+import type { ResolvedMedia } from '../mediaLocator';
 
 /** What is played: a file on the server, and its transcript if the vault has one. */
 export interface Track {
@@ -180,7 +181,10 @@ export class NowPlaying {
     }
     this.mediaSession(track);
     this.changed();
-    void cache.url(track.key).then(local => {
+    // The vault's own file, when this device has it (it was recorded here, say):
+    // nothing to fetch, nor to keep a second copy of.
+    const own = this.onDevice(track.key);
+    void (own ? Promise.resolve(this.plugin.app.vault.getResourcePath(own)) : cache.url(track.key)).then(local => {
       if (this.audio !== audio) return;
       this.local = !!local;
       audio.src = local ?? track.url;
@@ -191,6 +195,35 @@ export class NowPlaying {
       this.changed();
       void audio.play().catch(() => this.changed());
     });
+  }
+
+  /**
+   * Our audio, when what it plays is `media` (or a video's audio twin), or
+   * `transcript` is its transcript: the transcript view of it then reads
+   * along with this rather than play it a second time (from a copy of its
+   * own, maybe: the same recording in the vault).
+   */
+  elementFor(media: ResolvedMedia | null, transcript: TFile | null = null): HTMLAudioElement | null {
+    const { audio, track } = this;
+    if (!audio || !track || !media) return null;
+    if (transcript && track.transcript?.path === transcript.path) return audio;
+    const keys = [track.key, track.path];
+    const folder = this.plugin.settings.serverVault || this.plugin.app.vault.getName();
+    const urls = keys.map(k => this.plugin.library.libraryUrl(k));
+    for (const m of [media, media.audioTwin]) {
+      if (!m) continue;
+      if (m.file && keys.includes(`${folder}/${m.file.path}`)) return audio;
+      if (urls.includes(m.location) || urls.includes(m.src)) return audio;
+    }
+    return null;
+  }
+
+  /** The vault's file for a library path of this vault's own (<vault folder>/<path in the vault>), if it is on this device. */
+  private onDevice(key: string): TFile | null {
+    const folder = this.plugin.settings.serverVault || this.plugin.app.vault.getName();
+    if (!key.startsWith(`${folder}/`)) return null;
+    const file = this.plugin.app.vault.getAbstractFileByPath(key.slice(folder.length + 1));
+    return file instanceof TFile ? file : null;
   }
 
   /** Play what the playlist holds. */
@@ -285,13 +318,11 @@ export class NowPlaying {
     this.changed();
   }
 
-  /** Read along: the transcript, at where the playing is; this stops, the transcript's player takes over. */
+  /** Read along: the transcript, following this as it plays (see MediaTranscriptView). */
   async openTranscript(): Promise<void> {
     const file = this.track?.transcript;
     if (!file) return;
-    const at = this.time;
-    this.stop();
-    await this.plugin.openTranscript(file, at);
+    await this.plugin.openTranscript(file);
   }
 
   private changed(): void {

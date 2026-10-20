@@ -1,4 +1,4 @@
-import { FileView, WorkspaceLeaf, TFile, Notice, Menu } from 'obsidian';
+import { FileView, WorkspaceLeaf, TFile, Notice, Menu, Platform } from 'obsidian';
 import type MediaTranscriptPlugin from './main';
 import {
   findSubtitleTracks,
@@ -12,6 +12,7 @@ import type { ResolvedMedia } from './mediaLocator';
 import { parseSubtitle, SubtitleSegment, formatTime } from './utils/subtitleParser';
 import { parseTimeFragment, timeFragment } from './utils/timeFragment';
 import { t } from './i18n';
+import { renderBar } from './library/PlayerBar';
 
 // Transcript text size bounds (px). Defined here rather than in settings.ts to
 // keep the import direction one-way: settings.ts → this file.
@@ -72,10 +73,52 @@ export class MediaTranscriptView extends FileView {
   // A seek asked for before the player exists (a `#t=` link can arrive while
   // the file is still loading); applied as soon as the media element is built.
   private pendingSeek: { time: number; play: boolean } | null = null;
+  // Following the library's player (it plays this media): `mediaEl` is its
+  // audio, which this view reads along with and steers but never stops.
+  private followed: { el: HTMLAudioElement; bar: { remove: () => void } | null; tick: () => void; time: number } | null = null;
 
   constructor(leaf: WorkspaceLeaf, plugin: MediaTranscriptPlugin) {
     super(leaf);
     this.plugin = plugin;
+  }
+
+  onload() {
+    super.onload();
+    // The library's player starting (or stopping, or moving on from) this media: follow it, or play it here again.
+    this.register(this.plugin.nowPlaying.subscribe(() => {
+      if (!this.media || !this.transcriptSideEl) return;
+      const el = this.plugin.nowPlaying.elementFor(this.media, this.file);
+      if (el !== (this.followed?.el ?? null)) void this.rebuildPlayer();
+    }));
+    this.register(() => this.unfollow());
+  }
+
+  /** Stop reading along with the library's player, leaving it playing. */
+  private unfollow() {
+    const f = this.followed;
+    if (!f) return;
+    f.el.removeEventListener('timeupdate', f.tick);
+    f.bar?.remove();
+    this.followed = null;
+    if (this.mediaEl === f.el) this.mediaEl = null;
+  }
+
+  /** Read along with the library's player: its bar here (a phone has it floating already), and its time for the highlight. */
+  private follow(container: HTMLElement, el: HTMLAudioElement) {
+    this.contentEl.addClass('mt-audio-mode');
+    const bar = Platform.isMobile ? null : renderBar(container, this.plugin, 'mt-follow-bar');
+    const tick = () => {
+      if (this.followed) this.followed.time = el.currentTime;
+      this.syncHighlight();
+    };
+    el.addEventListener('timeupdate', tick);
+    this.followed = { el, bar, tick, time: el.currentTime };
+    this.mediaEl = el;
+    // Where it is now, shown at once (the line may be the one shown before, still far off screen).
+    this.segmentEls[this.activeIndex]?.removeClass('mt-active');
+    this.activeIndex = -1;
+    this.manualScrollUntil = 0;
+    this.syncHighlight();
   }
 
   getViewType() { return VIEW_TYPE_MEDIA_TRANSCRIPT; }
@@ -216,13 +259,19 @@ export class MediaTranscriptView extends FileView {
     const reused = this.transcriptSideEl;
     if (reused) reused.detach();
 
+    this.unfollow();
     this.contentEl.empty();
     this.contentEl.removeClass('mt-audio-mode');
     this.contentEl.removeClass('mt-reading-mode');
     this.mediaEl = null;
 
+    const playing = this.plugin.nowPlaying.elementFor(media, this.file);
     let transcriptSide: HTMLElement;
-    if (!media) {
+    if (media && playing) {
+      this.follow(this.contentEl.createDiv('mt-audio-bar mt-follow'), playing);
+      transcriptSide = reused ?? this.contentEl.createDiv('mt-transcript-side');
+      if (reused) this.contentEl.appendChild(reused);
+    } else if (!media) {
       this.contentEl.addClass('mt-reading-mode');
       this.buildNoMediaBar(this.contentEl.createDiv('mt-audio-bar mt-nomedia-bar'));
       transcriptSide = reused ?? this.contentEl.createDiv('mt-transcript-side');
@@ -271,12 +320,14 @@ export class MediaTranscriptView extends FileView {
 
   private async rebuildPlayer() {
     const old = this.mediaEl;
-    const state = old
-      ? { time: old.currentTime, rate: old.playbackRate, playing: !old.paused }
-      : null;
+    // The library's player is not ours to stop; where it was, this view's own takes up (paused).
+    const wasFollowing = this.followed;
+    const state = wasFollowing
+      ? { time: wasFollowing.time, rate: 1, playing: false }
+      : old ? { time: old.currentTime, rate: old.playbackRate, playing: !old.paused } : null;
     const scrollTop = this.transcriptEl?.scrollTop ?? 0;
 
-    if (old) {
+    if (old && !wasFollowing) {
       old.pause();
       old.removeAttribute('src'); // also disarms the audio-fallback error handler
       old.load();
@@ -285,7 +336,7 @@ export class MediaTranscriptView extends FileView {
     await this.buildLayout();
 
     const next = this.mediaEl;
-    if (state && next) {
+    if (state && next && !this.followed) {
       next.playbackRate = state.rate;
       const seek = () => { next.currentTime = state.time; };
       if (next.readyState > 0) seek();
@@ -334,7 +385,8 @@ export class MediaTranscriptView extends FileView {
   }
 
   async onUnloadFile(_file: TFile) {
-    if (this.mediaEl) {
+    if (this.followed) this.unfollow();
+    else if (this.mediaEl) {
       this.mediaEl.pause();
       this.mediaEl.removeAttribute('src');
       this.mediaEl.load();
@@ -947,8 +999,9 @@ export class MediaTranscriptView extends FileView {
 
     if (found === this.activeIndex) return;
 
-    if (this.activeIndex >= 0) {
-      this.segmentEls[this.activeIndex]?.removeClass('mt-active');
+    const before = this.activeIndex;
+    if (before >= 0) {
+      this.segmentEls[before]?.removeClass('mt-active');
     }
 
     this.activeIndex = found;
@@ -956,7 +1009,8 @@ export class MediaTranscriptView extends FileView {
     if (found >= 0) {
       this.segmentEls[found]?.addClass('mt-active');
       if (this.plugin.settings.autoScroll && Date.now() >= this.manualScrollUntil) {
-        this.scrollActiveIntoCenter(true);
+        // From one line to the next, smoothly; to the first shown (just opened, a seek), at once.
+        this.scrollActiveIntoCenter(before >= 0 && Math.abs(found - before) <= 2);
       }
     }
   }

@@ -12,6 +12,13 @@ const PREFIX = 'media-one:cache:';
 /** Prefetched by itself: added this recently, audio, no larger than this. */
 const PREFETCH_DAYS = 3;
 const PREFETCH_MAX = 300 * 1024 * 1024;
+/**
+ * A piece fetched by itself taking longer than this (under some 200 KB/s: a
+ * relay, a poor line) stops fetching by itself for SLOW_PAUSE_MS. It would
+ * crowd out what is playing over the same line, for a copy that takes hours.
+ */
+const SLOW_PIECE_MS = 40_000;
+const SLOW_PAUSE_MS = 60 * 60_000;
 const MIME: Record<string, string> = {
   m4a: 'audio/mp4', mp3: 'audio/mpeg', wav: 'audio/wav', aac: 'audio/aac', flac: 'audio/flac', ogg: 'audio/ogg', opus: 'audio/ogg',
   mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', mkv: 'video/x-matroska',
@@ -266,9 +273,13 @@ export class MediaCache {
     }
   }
 
+  /** Until when fetching by itself waits: the line was found too slow. */
+  private slowUntil = 0;
+
   private mayFetchByItself(): boolean {
     const { auto, wifiOnly } = this.prefs;
     if (!auto || !this.available || !navigator.onLine) return false;
+    if (Date.now() < this.slowUntil) return false;
     if (this.usage().total >= this.limit) return false;
     const c = (navigator as Navigator & { connection?: { type?: string; saveData?: boolean } }).connection;
     if (wifiOnly && (c?.type === 'cellular' || c?.saveData)) return false;
@@ -320,6 +331,7 @@ export class MediaCache {
       if (this.cancelled.has(job.path)) return;
       if (e.kind === 'auto' && !this.mayFetchByItself()) return;
       const end = e.have + PIECE - 1;
+      const began = Date.now();
       const r = await requestUrl({ url: job.url || this.urlOf(job.path), headers: { Range: `bytes=${e.have}-${end}` }, throw: false });
       if (r.status !== 206 && r.status !== 200) throw new Error(`HTTP ${r.status}`);
       const total = r.status === 206 ? Number(/\/(\d+)$/.exec(header(r.headers, 'content-range') ?? '')?.[1]) : r.arrayBuffer.byteLength;
@@ -330,6 +342,11 @@ export class MediaCache {
       if (body.byteLength === 0) throw new Error('empty piece');
       this.save();
       this.changed();
+      // What it fetched is kept; the rest waits for a better line (or a download asked for).
+      if (e.kind === 'auto' && e.have < e.size && Date.now() - began > SLOW_PIECE_MS) {
+        this.slowUntil = Date.now() + SLOW_PAUSE_MS;
+        return;
+      }
     }
     e.used = Date.now();
     this.save();

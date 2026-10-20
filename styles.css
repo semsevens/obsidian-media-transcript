@@ -2516,3 +2516,12 @@ body.mo-fab-lifted .view-actions.mod-raised .view-action {
   font-size: var(--font-ui-smaller);
   font-variant-numeric: tabular-nums;
 }
+
+/* A transcript following the library's player: its bar in place of a player of its own. */
+.mt-follow .mo-bar.mt-follow-bar {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  background: none;
+  box-shadow: none;
+}
