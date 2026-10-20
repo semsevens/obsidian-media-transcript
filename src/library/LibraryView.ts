@@ -4,7 +4,7 @@ import type { TrashItem } from './client';
 import { deleteMedia, renameMedia, restoreMedia } from './actions';
 import { ArchiveList } from './ArchiveList';
 import { MediaList } from './MediaList';
-import { renderDock } from './PlayerBar';
+import { renderDock, renderPlaylist } from './PlayerBar';
 import { t } from '../i18n';
 import { formatSize } from '../utils/format';
 
@@ -20,7 +20,8 @@ export class LibraryView extends ItemView {
   private filter = '';
   private listEl!: HTMLElement;
   private statusEl!: HTMLElement;
-  private tab: 'media' | 'archive' = 'media';
+  private tab: 'media' | 'archive' | 'playlist' = 'media';
+  private playlistDown: (() => void) | null = null;
   private tabsEl!: HTMLElement;
   private searchEl!: HTMLInputElement;
   private readonly media: MediaList;
@@ -67,7 +68,7 @@ export class LibraryView extends ItemView {
     setIcon(refresh, 'refresh-cw');
     refresh.addEventListener('click', () => { void this.refresh(); });
     this.tabsEl = root.createDiv('mo-lib-tabs');
-    for (const [tab, label] of [['media', t('library.tabMedia')], ['archive', t('library.tabArchive')]] as const) {
+    for (const [tab, label] of [['media', t('library.tabMedia')], ['archive', t('library.tabArchive')], ['playlist', t('library.tabPlaylist')]] as const) {
       const b = this.tabsEl.createEl('button', { text: label, cls: 'mo-lib-tab' });
       b.dataset.tab = tab;
       b.addEventListener('click', () => {
@@ -84,6 +85,10 @@ export class LibraryView extends ItemView {
     this.register(this.plugin.nowPlaying.subscribe(() => {
       if (this.tab === 'media') this.media.paintPlaying(this.listEl);
     }));
+    this.register(() => this.playlistDown?.());
+    this.register(this.plugin.playlist.subscribe(() => {
+      if (this.tab === 'media') this.media.paintQueued(this.listEl);
+    }));
     this.register(this.plugin.cache.subscribe(() => {
       if (this.tab === 'media') this.media.paintCache(this.listEl);
     }));
@@ -91,6 +96,7 @@ export class LibraryView extends ItemView {
   }
 
   async refresh(): Promise<void> {
+    if (this.tab === 'playlist') return this.renderList();
     if (this.tab === 'archive') await this.archive.refresh();
     else await this.media.refresh();
     this.renderList();
@@ -98,11 +104,15 @@ export class LibraryView extends ItemView {
 
   private renderList(): void {
     const { listEl, statusEl } = this;
+    this.playlistDown?.();
+    this.playlistDown = null;
     listEl.empty();
     statusEl.empty();
     this.tabsEl.querySelectorAll<HTMLElement>('.mo-lib-tab').forEach(b => b.toggleClass('is-active', b.dataset.tab === this.tab));
     this.searchEl.placeholder = t(this.tab === 'archive' ? 'library.filterArchive' : 'library.filterPlaceholder');
-    if (this.tab === 'archive') this.archive.render(listEl, statusEl, this.filter);
+    this.searchEl.toggle(this.tab !== 'playlist');
+    if (this.tab === 'playlist') this.playlistDown = renderPlaylist(listEl, this.plugin);
+    else if (this.tab === 'archive') this.archive.render(listEl, statusEl, this.filter);
     else this.media.render(listEl, statusEl, this.filter);
   }
 

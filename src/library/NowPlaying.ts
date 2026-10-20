@@ -1,8 +1,9 @@
-import type { TFile } from 'obsidian';
+import { TFile } from 'obsidian';
 import type MediaTranscriptPlugin from '../main';
 import { DeviceState } from './deviceState';
 import { parseSubtitle, type SubtitleSegment } from '../utils/subtitleParser';
 import { resumeAt } from './cachePolicy';
+import type { QueueEntry } from './playlist';
 
 /** What is played: a file on the server, and its transcript if the vault has one. */
 export interface Track {
@@ -38,6 +39,8 @@ export class NowPlaying {
   local = false;
   /** It could not be played (offline, and not on this device). */
   failed = false;
+  /** Sleep timer: pause at this time (ms), or when this one ends; null: off. */
+  sleep: number | 'end' | null = null;
 
   constructor(private readonly plugin: MediaTranscriptPlugin) {
     this.device = new DeviceState(plugin.app);
@@ -79,6 +82,34 @@ export class NowPlaying {
     return [i > 0 ? at(i - 1) : '', i >= 0 ? at(i) : '', at(i + 1)];
   }
 
+  /**
+   * How much is said in each of `n` equal parts of it, 0–1, from the
+   * transcript (all 0 without one): what the seek bar draws.
+   */
+  density(n: number): number[] {
+    const d = this.duration;
+    const key = `${n}:${d}:${this.segments.length}`;
+    if (this.densityMemo?.key === key) return this.densityMemo.value;
+    const value = this.computeDensity(n, d);
+    this.densityMemo = { key, value };
+    return value;
+  }
+
+  private densityMemo: { key: string; value: number[] } | null = null;
+
+  private computeDensity(n: number, d: number): number[] {
+    const out = new Array<number>(n).fill(0);
+    if (!d || this.segments.length === 0) return out;
+    for (const s of this.segments) {
+      const from = Math.max(0, Math.floor((s.startTime / d) * n));
+      const to = Math.min(n - 1, Math.floor((Math.max(s.startTime, s.endTime) / d) * n));
+      const share = s.text.length / (to - from + 1);
+      for (let i = from; i <= to; i++) out[i] += share;
+    }
+    const max = Math.max(...out);
+    return max > 0 ? out.map(v => v / max) : out;
+  }
+
   /** Call `fn` whenever anything changes (the track, playing or not, the time); returns how to stop. */
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
@@ -97,6 +128,8 @@ export class NowPlaying {
     this.failed = false;
     const { cache } = this.plugin;
     cache.playing = track.key;
+    // What is played goes to the top of the playlist.
+    this.plugin.playlist.add(entryOf(track), 'top');
     const audio = (this.audio = new Audio());
     audio.preload = 'auto';
     for (const type of ['play', 'pause', 'timeupdate', 'loadedmetadata', 'ratechange']) audio.addEventListener(type, () => this.changed());
@@ -104,10 +137,16 @@ export class NowPlaying {
     audio.addEventListener('play', () => pauseAllBut(audio));
     audio.addEventListener('ended', () => {
       this.keepPlace(true);
-      this.stop();
+      this.finished(track);
     });
     audio.addEventListener('pause', () => this.keepPlace(true));
-    audio.addEventListener('timeupdate', () => this.keepPlace(false));
+    audio.addEventListener('timeupdate', () => {
+      this.keepPlace(false);
+      if (typeof this.sleep === 'number' && Date.now() >= this.sleep) {
+        this.sleep = null;
+        audio.pause();
+      }
+    });
     audio.addEventListener('error', () => {
       if (this.audio !== audio) return;
       this.failed = true;
@@ -139,6 +178,43 @@ export class NowPlaying {
       this.changed();
       void audio.play().catch(() => this.changed());
     });
+  }
+
+  /** Play what the playlist holds. */
+  playEntry(entry: QueueEntry): void {
+    const file = entry.transcript ? this.plugin.app.vault.getAbstractFileByPath(entry.transcript) : null;
+    this.play({
+      path: entry.path,
+      key: entry.key,
+      url: this.plugin.library.libraryUrl(entry.key),
+      size: entry.size,
+      title: entry.title,
+      subtitle: entry.subtitle,
+      transcript: file instanceof TFile ? file : null,
+    });
+  }
+
+  /** Listened to the end: it leaves the playlist, and the next one plays (unless the timer says stop). */
+  private finished(track: Track): void {
+    const { playlist } = this.plugin;
+    const next = playlist.next(track.path);
+    playlist.remove(track.path);
+    const stopHere = this.sleep === 'end';
+    if (stopHere) this.sleep = null;
+    this.stop();
+    if (next && !stopHere) this.playEntry(next);
+  }
+
+  /** Sleep timer: in `minutes`, at the end of this one, or off. */
+  setSleep(minutes: number | 'end' | null): void {
+    this.sleep = typeof minutes === 'number' ? Date.now() + minutes * 60000 : minutes;
+    this.changed();
+  }
+
+  /** Play the next in the playlist now. */
+  skip(): void {
+    const next = this.plugin.playlist.next(this.track?.path ?? null);
+    if (next) this.playEntry(next);
   }
 
   /** Keep where it is, to take it up there next time (and to know what was listened to). */
@@ -224,6 +300,11 @@ export class NowPlaying {
       // not offered here
     }
   }
+}
+
+/** What the playlist keeps of a track. */
+export function entryOf(track: Track): QueueEntry {
+  return { path: track.path, key: track.key, size: track.size, title: track.title, subtitle: track.subtitle, transcript: track.transcript?.path ?? null };
 }
 
 /** One sound at a time: pause every other audio or video on the page. */

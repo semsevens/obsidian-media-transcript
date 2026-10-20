@@ -2,6 +2,7 @@ import { Menu, Notice, TFile, setIcon } from 'obsidian';
 import type MediaTranscriptPlugin from '../main';
 import type { IndexEntry, Job, TrashItem } from './client';
 import { DeviceState } from './deviceState';
+import type { QueueEntry } from './playlist';
 import { durationIn, formatDuration, isDatedName, isGenericName, isTranscriptNamedFor, openingWords, recordedAt, withoutDate } from './mediaInfo';
 import { formatSize } from '../utils/format';
 import { obsidianLanguage, t } from '../i18n';
@@ -244,6 +245,23 @@ export class MediaList {
     if (current === this.own && this.collection !== '*') this.renderTrash(list);
     this.paintPlaying(list);
     this.paintCache(list);
+    this.paintQueued(list);
+  }
+
+  /** Each row's playlist button: in it (tap to take out) or not (tap to add). */
+  paintQueued(list: HTMLElement): void {
+    const { playlist } = this.plugin;
+    for (const row of Array.from(list.querySelectorAll<HTMLElement>('.mo-lib-media-row'))) {
+      const button = row.querySelector<HTMLElement>('.mo-lib-queue');
+      if (!button) continue;
+      const queued = playlist.has(row.dataset.path ?? '');
+      const icon = queued ? 'list-checks' : 'list-plus';
+      if (button.dataset.icon === icon) continue;
+      button.dataset.icon = icon;
+      setIcon(button, icon);
+      button.toggleClass('is-queued', queued);
+      button.setAttr('aria-label', t(queued ? 'library.playlistRemove' : 'library.menuAddToPlaylist'));
+    }
   }
 
   /** What the row plays: a video's audio twin, or the file itself. */
@@ -421,6 +439,16 @@ export class MediaList {
       if (it.transcript) void this.plugin.openTranscript(it.transcript);
       else this.play(it);
     });
+    const queue = row.createEl('button', { cls: 'clickable-icon mo-lib-queue' });
+    queue.addEventListener('click', evt => {
+      evt.stopPropagation();
+      const { playlist } = this.plugin;
+      if (playlist.has(it.path)) playlist.remove(it.path);
+      else {
+        playlist.add(this.entry(it), 'end');
+        new Notice(t('library.playlistAdded', { name: this.entry(it).title }));
+      }
+    });
     const more = row.createEl('button', { cls: 'clickable-icon mo-lib-more-actions', attr: { 'aria-label': t('library.moreActions') } });
     setIcon(more, 'more-horizontal');
     more.addEventListener('click', evt => this.menu(evt, it));
@@ -447,6 +475,10 @@ export class MediaList {
   private menu(evt: MouseEvent, it: Item): void {
     const menu = new Menu();
     menu.addItem(i => i.setTitle(t('library.menuPlay')).setIcon('play').onClick(() => this.play(it)));
+    const { playlist } = this.plugin;
+    menu.addItem(i => i.setTitle(t('library.menuPlayNext')).setIcon('list-start').onClick(() => playlist.add(this.entry(it), 'next')));
+    if (playlist.has(it.path)) menu.addItem(i => i.setTitle(t('library.playlistRemove')).setIcon('list-x').onClick(() => playlist.remove(it.path)));
+    else menu.addItem(i => i.setTitle(t('library.menuAddToPlaylist')).setIcon('list-plus').onClick(() => playlist.add(this.entry(it), 'end')));
     if (it.transcript) {
       const tr = it.transcript;
       menu.addItem(i => i.setTitle(t('library.menuOpenTranscript')).setIcon('file-text').onClick(() => { void this.plugin.openTranscript(tr); }));
@@ -495,16 +527,22 @@ export class MediaList {
   /** Play `it` in the player, or pause and resume it if it is the one playing. */
   private play(it: Item): void {
     const f = this.fetchable(it);
+    const e = this.entry(it);
+    this.plugin.nowPlaying.play({ path: e.path, key: e.key, url: f.url, size: e.size, title: e.title, subtitle: e.subtitle, transcript: it.transcript });
+  }
+
+  /** What the playlist keeps of `it`. */
+  private entry(it: Item): QueueEntry {
+    const f = this.fetchable(it);
     const collection = it.collection === this.own ? t('library.collectionMine') : it.collection;
-    this.plugin.nowPlaying.play({
+    return {
       path: it.path,
       key: f.path,
-      url: f.url,
       size: f.size,
       title: (isGenericName(it.name) && this.details.get(it.path)?.words) || it.title,
       subtitle: [collection, it.recorded ? formatWhen(it.recorded) : ''].filter(Boolean).join(' · '),
-      transcript: it.transcript,
-    });
+      transcript: it.transcript?.path ?? null,
+    };
   }
 
   private async transcribe(vaultPath: string, name: string): Promise<void> {

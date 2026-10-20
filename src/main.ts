@@ -20,6 +20,7 @@ import { TranscriptSync } from './library/transcriptSync';
 import { NowPlaying } from './library/NowPlaying';
 import { MiniPlayer } from './library/PlayerBar';
 import { MediaCache } from './library/mediaCache';
+import { Playlist } from './library/playlist';
 import { t } from './i18n';
 
 // Subtitle extensions we globally register for click-to-open. Clicking any of
@@ -55,6 +56,7 @@ export default class MediaTranscriptPlugin extends Plugin {
   transcriptSync!: TranscriptSync;
   nowPlaying!: NowPlaying;
   cache!: MediaCache;
+  playlist!: Playlist;
   // The modules' part of data.json, kept beside the settings above.
   private moduleState: ModuleState = { modules: {}, enabledModules: {} };
   // Uploads an earlier version queued in data.json; this device takes them over.
@@ -76,6 +78,7 @@ export default class MediaTranscriptPlugin extends Plugin {
     this.transcriptSync.start();
     this.cache = new MediaCache(() => this.settings.serverUrl);
     this.register(() => this.cache.close());
+    this.playlist = new Playlist(this);
     this.nowPlaying = new NowPlaying(this);
     new MiniPlayer(this, this.nowPlaying);
     this.registerView(VIEW_TYPE_LIBRARY, leaf => new LibraryView(leaf, this));
@@ -565,6 +568,15 @@ export default class MediaTranscriptPlugin extends Plugin {
     this.moduleState.modules = modules ?? {};
     this.moduleState.enabledModules = enabledModules ?? {};
     this.legacyPending = pendingUploads ?? [];
+  }
+
+  /** data.json changed on disk (synced from another device): the playlist with it. */
+  async onExternalSettingsChange() {
+    const saved = (await this.loadData()) as Partial<MediaTranscriptSettings> | null;
+    if (saved?.playlist) {
+      this.settings.playlist = saved.playlist;
+      this.playlist?.reloaded();
+    }
   }
 
   async saveSettings() {

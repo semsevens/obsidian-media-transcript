@@ -1,11 +1,13 @@
 import { Menu, Modal, Platform, setIcon } from 'obsidian';
 import type MediaTranscriptPlugin from '../main';
 import { formatDuration } from './mediaInfo';
-import type { NowPlaying } from './NowPlaying';
+import type { NowPlaying, Track } from './NowPlaying';
+import type { QueueEntry } from './playlist';
 import { formatSize } from '../utils/format';
 import { t } from '../i18n';
 
 const VIEW_TYPE_LIBRARY = 'media-one-library';
+const BARS = 48;
 
 function iconButton(parent: HTMLElement, icon: string, label: string, cls: string, onClick: (evt: MouseEvent) => void): HTMLButtonElement {
   const b = parent.createEl('button', { cls: `clickable-icon ${cls}`, attr: { 'aria-label': label } });
@@ -26,33 +28,94 @@ function paintPlay(button: HTMLElement, playing: boolean): void {
   button.setAttr('aria-label', t(playing ? 'library.playerPause' : 'library.menuPlay'));
 }
 
+function hash(text: string): number {
+  let h = 0;
+  for (const c of text) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return h;
+}
+
+/**
+ * A cover for what has none: a colour of its own (by where it is from) and
+ * the name of where it is from.
+ */
+export function renderCover(parent: HTMLElement, subtitle: string, cls: string): HTMLElement {
+  const from = subtitle.split(' · ')[0] || '♪';
+  const hue = hash(from) % 360;
+  const cover = parent.createDiv(`mo-cover ${cls}`);
+  cover.style.setProperty('--mo-cover-a', `hsl(${hue} 55% 52%)`);
+  cover.style.setProperty('--mo-cover-b', `hsl(${(hue + 50) % 360} 60% 30%)`);
+  // A small one has room for two characters (or a short word) only.
+  const short = /[\u3400-\u9fff]/.test(from) ? Array.from(from).slice(0, 2).join('') : from.slice(0, 4);
+  cover.createSpan({ cls: 'mo-cover-text', text: cls.includes('is-small') ? short : from });
+  return cover;
+}
+
+/** The ring round the play button: how far it has played. */
+function ringButton(parent: HTMLElement, np: NowPlaying, cls: string): { button: HTMLButtonElement; paint: () => void } {
+  const button = parent.createEl('button', { cls: `clickable-icon mo-ring ${cls}`, attr: { 'aria-label': t('library.menuPlay') } });
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 36 36');
+  svg.classList.add('mo-ring-svg');
+  const track = document.createElementNS(ns, 'circle');
+  const done = document.createElementNS(ns, 'circle');
+  for (const c of [track, done]) {
+    c.setAttribute('cx', '18');
+    c.setAttribute('cy', '18');
+    c.setAttribute('r', '16');
+    c.setAttribute('pathLength', '100');
+    svg.appendChild(c);
+  }
+  track.classList.add('mo-ring-track');
+  done.classList.add('mo-ring-done');
+  const icon = button.createSpan('mo-ring-icon');
+  button.appendChild(svg);
+  button.addEventListener('click', evt => {
+    evt.stopPropagation();
+    np.toggle();
+  });
+  return {
+    button,
+    paint: () => {
+      paintPlay(icon, np.playing);
+      const d = np.duration;
+      done.setAttribute('stroke-dasharray', `${d ? (np.time / d) * 100 : 0} 100`);
+    },
+  };
+}
+
 /**
  * The player bar, the same wherever it is (at the foot of the library,
- * floating above a phone's navigation): play or pause, what is playing and
- * the line being said, stop. Tap it to open what is playing in full.
- * Hidden while nothing plays. Returns how to take it down.
+ * floating above a phone's navigation): what is playing, where it is, play
+ * or pause, the playlist. Tap it to open what is playing in full. Hidden
+ * while nothing plays.
  */
 export function renderBar(parent: HTMLElement, plugin: MediaTranscriptPlugin, cls: string, shown: () => boolean = () => true): { el: HTMLElement; paint: () => void; remove: () => void } {
   const np = plugin.nowPlaying;
   const bar = parent.createDiv(`mo-bar ${cls}`);
-  const play = iconButton(bar, 'play', t('library.menuPlay'), 'mo-bar-play', () => np.toggle());
+  let cover: HTMLElement | null = null;
+  let coverFor = '';
+  const coverSlot = bar.createDiv('mo-bar-cover');
   const text = bar.createDiv('mo-bar-text');
   const title = text.createDiv('mo-bar-title');
   const line = text.createDiv('mo-bar-line');
-  text.addEventListener('click', () => new NowPlayingModal(plugin).open());
-  iconButton(bar, 'x', t('library.stop'), 'mo-bar-close', () => np.stop());
-  const progress = bar.createDiv('mo-bar-progress');
+  bar.addEventListener('click', () => new NowPlayingModal(plugin).open());
+  const ring = ringButton(bar, np, 'mo-bar-play');
+  iconButton(bar, 'list-music', t('library.tabPlaylist'), 'mo-bar-list', () => new PlaylistModal(plugin).open());
   const paint = () => {
     const track = np.track;
     bar.toggleClass('is-hidden', !track || !shown());
     if (!track) return;
-    paintPlay(play, np.playing);
+    if (coverFor !== track.subtitle) {
+      coverFor = track.subtitle;
+      cover?.remove();
+      cover = renderCover(coverSlot, track.subtitle, 'is-small');
+    }
+    ring.paint();
     title.setText(track.title);
     const d = np.duration;
-    const said = np.failed ? t('library.playerOffline') : np.line;
-    line.setText(said || (d ? `${formatDuration(np.time)} / ${formatDuration(d)}` : formatDuration(np.time)));
+    line.setText(np.failed ? t('library.playerOffline') : d ? `${formatDuration(np.time)} / ${formatDuration(d)}` : formatDuration(np.time));
     line.toggleClass('is-error', np.failed);
-    progress.style.width = d ? `${(np.time / d) * 100}%` : '0';
   };
   paint();
   const unsubscribe = np.subscribe(paint);
@@ -76,10 +139,57 @@ export function renderDock(parent: HTMLElement, plugin: MediaTranscriptPlugin): 
   };
 }
 
+/** The seek bar: how much is said along it (from the transcript), what has played, dragged to seek. */
+function renderWave(parent: HTMLElement, np: NowPlaying): { paint: () => void } {
+  const wave = parent.createDiv('mo-wave');
+  const bars: HTMLElement[] = [];
+  for (let i = 0; i < BARS; i++) bars.push(wave.createDiv('mo-wave-bar'));
+  const head = wave.createDiv('mo-wave-head');
+  let drag: number | null = null;
+  let heights = '';
+  const at = (evt: PointerEvent) => {
+    const r = wave.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (evt.clientX - r.left) / r.width));
+  };
+  wave.addEventListener('pointerdown', evt => {
+    wave.setPointerCapture(evt.pointerId);
+    drag = at(evt);
+    paint();
+  });
+  wave.addEventListener('pointermove', evt => {
+    if (drag === null) return;
+    drag = at(evt);
+    paint();
+  });
+  const end = () => {
+    if (drag !== null && np.duration) np.seek(drag * np.duration);
+    drag = null;
+  };
+  wave.addEventListener('pointerup', end);
+  wave.addEventListener('pointercancel', () => { drag = null; });
+  const paint = () => {
+    const d = np.duration;
+    const share = drag ?? (d ? np.time / d : 0);
+    const density = np.density(BARS);
+    const key = density.map(v => v.toFixed(2)).join();
+    if (key !== heights) {
+      heights = key;
+      bars.forEach((b, i) => b.style.setProperty('--h', `${18 + density[i] * 82}%`));
+    }
+    const played = Math.round(share * BARS);
+    bars.forEach((b, i) => b.toggleClass('is-played', i < played));
+    head.style.setProperty('--mo-at', `${share * 100}%`);
+  };
+  return { paint };
+}
+
+const SLEEP = [15, 30, 60, 90];
+
 /**
- * What is playing, in full: the lines being said, where it is, the controls,
- * the speed, keeping it on this device, and reading along in its transcript.
- * A modal, so a phone's back closes it.
+ * What is playing, in full (a phone: the whole screen): its cover, the line
+ * being said over the seek bar, the controls, the speed, a sleep timer, and
+ * the transcript, the playlist and the library. A modal, so a phone's back
+ * closes it.
  */
 export class NowPlayingModal extends Modal {
   private unsubscribe: (() => void) | null = null;
@@ -96,49 +206,11 @@ export class NowPlayingModal extends Modal {
     // The floating bar is this, small: not both at once.
     document.body.addClass('mo-np-open');
     const root = this.contentEl.createDiv('mo-np');
-    const title = root.createDiv('mo-np-title');
-    const subtitle = root.createDiv('mo-np-subtitle');
-    const lines = root.createDiv('mo-np-lines');
-    const before = lines.createDiv('mo-np-line is-before');
-    const now = lines.createDiv('mo-np-line is-now');
-    const after = lines.createDiv('mo-np-line is-after');
-    lines.setAttr('aria-label', t('library.playerReadAlong'));
-    lines.addEventListener('click', () => {
-      this.close();
-      void np.openTranscript();
-    });
 
-    const seek = root.createEl('input', { type: 'range', cls: 'mo-np-seek', attr: { min: '0', max: '1000', value: '0', 'aria-label': t('library.seek') } });
-    let dragging = false;
-    seek.addEventListener('input', () => {
-      dragging = true;
-      if (np.duration) np.seek((Number(seek.value) / 1000) * np.duration);
-    });
-    seek.addEventListener('change', () => { dragging = false; });
-    const times = root.createDiv('mo-np-times');
-    const at = times.createSpan();
-    const left = times.createSpan();
-
-    const controls = root.createDiv('mo-np-controls');
-    const rate = controls.createEl('button', { cls: 'mo-np-rate', attr: { 'aria-label': t('library.playerRate') } });
-    rate.addEventListener('click', () => np.nextRate());
-    iconButton(controls, 'rotate-ccw', t('library.playerBack'), 'mo-np-back', () => np.back());
-    const play = iconButton(controls, 'play', t('library.menuPlay'), 'mo-np-play', () => np.toggle());
-    iconButton(controls, 'rotate-cw', t('library.playerAhead'), 'mo-np-ahead', () => np.ahead());
-    iconButton(controls, 'square', t('library.stop'), 'mo-np-stop', () => {
-      np.stop();
-      this.close();
-    });
-
-    const actions = root.createDiv('mo-np-actions');
-    const read = actions.createEl('button', { cls: 'mo-np-action', text: t('library.playerReadAlongShort') });
-    setIcon(read.createSpan({ cls: 'mo-np-action-icon', prepend: true }), 'file-text');
-    read.addEventListener('click', () => {
-      this.close();
-      void np.openTranscript();
-    });
-    const keep = actions.createEl('button', { cls: 'mo-np-action mo-np-keep' });
-    keep.addEventListener('click', evt => {
+    const top = root.createDiv('mo-np-top');
+    iconButton(top, 'chevron-down', t('library.playerClose'), 'mo-np-down', () => this.close());
+    top.createDiv('mo-np-top-gap');
+    const keep = iconButton(top, 'download', t('library.cacheDownload'), 'mo-np-keep', evt => {
       const track = np.track;
       if (!track) return;
       const e = cache.entry(track.key);
@@ -152,10 +224,53 @@ export class NowPlayingModal extends Modal {
         cache.keep({ path: track.key, url: track.url, size: track.size });
       }
     });
-    const library = actions.createEl('button', { cls: 'mo-np-action', text: t('library.playerShowLibrary') });
-    library.addEventListener('click', () => {
+    const keepLabel = keep.createSpan('mo-np-keep-label');
+
+    const coverSlot = root.createDiv('mo-np-cover');
+    let coverFor = '';
+    const title = root.createDiv('mo-np-title');
+    const subtitle = root.createDiv('mo-np-subtitle');
+
+    const seekRow = root.createDiv('mo-np-seekrow');
+    const at = seekRow.createSpan('mo-np-at');
+    const line = seekRow.createDiv('mo-np-line');
+    line.setAttr('aria-label', t('library.playerReadAlong'));
+    line.addEventListener('click', () => {
       this.close();
-      void plugin.openLibrary();
+      void np.openTranscript();
+    });
+    const left = seekRow.createSpan('mo-np-left');
+    const wave = renderWave(root, np);
+
+    const controls = root.createDiv('mo-np-controls');
+    const rate = controls.createEl('button', { cls: 'mo-np-rate', attr: { 'aria-label': t('library.playerRate') } });
+    rate.addEventListener('click', () => np.nextRate());
+    const back = iconButton(controls, 'rotate-ccw', t('library.playerBack'), 'mo-np-skip', () => np.back());
+    back.createSpan({ cls: 'mo-np-skip-n', text: '15' });
+    const play = iconButton(controls, 'play', t('library.menuPlay'), 'mo-np-play', () => np.toggle());
+    const ahead = iconButton(controls, 'rotate-cw', t('library.playerAhead'), 'mo-np-skip', () => np.ahead());
+    ahead.createSpan({ cls: 'mo-np-skip-n', text: '30' });
+    const sleep = iconButton(controls, 'timer', t('library.playerSleep'), 'mo-np-sleep', evt => {
+      const menu = new Menu();
+      for (const m of SLEEP) menu.addItem(i => i.setTitle(t('library.playerSleepMinutes', { minutes: m })).onClick(() => np.setSleep(m)));
+      menu.addItem(i => i.setTitle(t('library.playerSleepEnd')).onClick(() => np.setSleep('end')));
+      if (np.sleep !== null) menu.addItem(i => i.setTitle(t('library.playerSleepOff')).setIcon('x').onClick(() => np.setSleep(null)));
+      menu.showAtMouseEvent(evt);
+    });
+    const sleepLabel = sleep.createSpan('mo-np-sleep-label');
+
+    const actions = root.createDiv('mo-np-actions');
+    const read = iconButton(actions, 'file-text', t('library.playerReadAlongShort'), 'mo-np-action', () => {
+      this.close();
+      void np.openTranscript();
+    });
+    const list = actions.createEl('button', { cls: 'mo-np-action mo-np-list' });
+    setIcon(list.createSpan('mo-np-action-icon'), 'list-music');
+    const listLabel = list.createSpan();
+    list.addEventListener('click', () => new PlaylistModal(plugin).open());
+    iconButton(actions, 'square', t('library.stop'), 'mo-np-action', () => {
+      np.stop();
+      this.close();
     });
 
     const paint = () => {
@@ -164,40 +279,47 @@ export class NowPlayingModal extends Modal {
         this.close();
         return;
       }
+      if (coverFor !== track.subtitle) {
+        coverFor = track.subtitle;
+        coverSlot.empty();
+        renderCover(coverSlot, track.subtitle, 'is-large');
+      }
       title.setText(track.title);
       subtitle.setText([track.subtitle, np.local ? t('library.playerFromDevice') : ''].filter(Boolean).join(' · '));
-      const [b, n, a] = np.around;
-      before.setText(b);
-      now.setText(np.failed ? t('library.playerOffline') : n);
-      now.toggleClass('is-error', np.failed);
-      after.setText(a);
-      lines.toggle(!!track.transcript || np.failed);
+      line.setText(np.failed ? t('library.playerOffline') : np.line);
+      line.toggleClass('is-error', np.failed);
       read.toggle(!!track.transcript);
       paintPlay(play, np.playing);
       const d = np.duration;
-      if (!dragging && d) seek.value = String(Math.round((np.time / d) * 1000));
-      seek.style.setProperty('--mo-progress', `${Number(seek.value) / 10}%`);
       at.setText(formatDuration(np.time));
       left.setText(d ? `-${formatDuration(Math.max(0, d - np.time))}` : '');
+      wave.paint();
       rate.setText(`${np.rate}×`);
+      const s = np.sleep;
+      sleepLabel.setText(s === 'end' ? t('library.playerSleepEndShort') : typeof s === 'number' ? `${Math.max(1, Math.ceil((s - Date.now()) / 60000))}′` : '');
+      sleep.toggleClass('is-on', s !== null);
+      const count = plugin.playlist.entries.length;
+      listLabel.setText(count ? t('library.playlistCount', { count }) : t('library.tabPlaylist'));
       const e = cache.entry(track.key);
       const p = cache.progress(track.key);
-      const label = !cache.available ? null
-        : cache.complete(track.key) ? (e?.kind === 'kept' ? t('library.cacheKept') : t('library.cacheKeep'))
-          : p && e?.kind === 'kept' ? t('library.cacheDownloading', { percent: percent(p.have, p.size) })
-            : t('library.cacheDownload');
-      keep.toggle(label !== null);
-      keep.empty();
-      setIcon(keep.createSpan('mo-np-action-icon'), cache.complete(track.key) && e?.kind === 'kept' ? 'check' : 'download');
-      keep.createSpan({ text: label ?? '' });
-      keep.setAttr('title', track.size ? formatSize(track.size) : '');
+      const kept = cache.complete(track.key) && e?.kind === 'kept';
+      keep.toggle(cache.available);
+      if (keep.dataset.icon !== (kept ? 'check' : 'download')) {
+        keep.dataset.icon = kept ? 'check' : 'download';
+        setIcon(keep, kept ? 'check' : 'download');
+        keep.appendChild(keepLabel);
+      }
+      keepLabel.setText(p?.active && e?.kind === 'kept' ? `${p.size ? Math.floor((p.have / p.size) * 100) : 0}%` : '');
+      keep.setAttr('aria-label', kept ? t('library.cacheKept') : track.size ? t('library.cacheDownloadSized', { size: formatSize(track.size) }) : t('library.cacheDownload'));
     };
     paint();
     const offNp = np.subscribe(paint);
     const offCache = cache.subscribe(paint);
+    const offList = plugin.playlist.subscribe(paint);
     this.unsubscribe = () => {
       offNp();
       offCache();
+      offList();
     };
   }
 
@@ -208,8 +330,125 @@ export class NowPlayingModal extends Modal {
   }
 }
 
-function percent(have: number, size: number): number {
-  return size ? Math.floor((have / size) * 100) : 0;
+/**
+ * The playlist: what plays next, in order. Tap one to play it; drag the
+ * handle to move it; remove one, or clear them all. In the library's own
+ * tab, and over the player.
+ */
+export function renderPlaylist(parent: HTMLElement, plugin: MediaTranscriptPlugin): () => void {
+  const { playlist, nowPlaying: np } = plugin;
+  const root = parent.createDiv('mo-pl');
+  const paint = () => {
+    root.empty();
+    const entries = playlist.entries;
+    const head = root.createDiv('mo-pl-head');
+    head.createSpan({ cls: 'mo-pl-count', text: t('library.playlistCount', { count: entries.length }) });
+    if (entries.length) {
+      const clear = head.createEl('button', { cls: 'mo-pl-clear', text: t('library.playlistClear') });
+      clear.addEventListener('click', () => playlist.clear());
+    }
+    if (entries.length === 0) {
+      root.createDiv({ cls: 'mo-pl-empty', text: t('library.playlistEmpty') });
+      return;
+    }
+    const list = root.createDiv('mo-pl-list');
+    entries.forEach((e, i) => renderEntry(list, e, i));
+  };
+  const renderEntry = (list: HTMLElement, e: QueueEntry, index: number) => {
+    const row = list.createDiv('mo-pl-row');
+    const playing = np.track?.path === e.path;
+    row.toggleClass('is-playing', playing);
+    const grip = row.createDiv({ cls: 'mo-pl-grip', attr: { 'aria-label': t('library.playlistMove') } });
+    setIcon(grip, 'grip-vertical');
+    renderCover(row, e.subtitle, 'is-small');
+    const main = row.createDiv('mo-pl-main');
+    main.createDiv({ cls: 'mo-pl-title', text: e.title });
+    const stats = plugin.cache.statsOf(e.key);
+    const meta = [e.subtitle];
+    if (stats?.duration) meta.push(stats.position > 10 ? t('library.playlistLeft', { time: formatDuration(Math.max(0, stats.duration - stats.position)) }) : formatDuration(stats.duration));
+    main.createDiv({ cls: 'mo-pl-meta', text: meta.filter(Boolean).join(' · ') });
+    if (playing) {
+      const eq = row.createDiv('mo-pl-now');
+      setIcon(eq, np.playing ? 'volume-2' : 'pause');
+    }
+    iconButton(row, 'x', t('library.playlistRemove'), 'mo-pl-remove', () => playlist.remove(e.path));
+    main.addEventListener('click', () => {
+      if (playing) np.toggle();
+      else np.playEntry(e);
+    });
+    dragToMove(grip, row, list, index, to => playlist.move(index, to));
+  };
+  paint();
+  const offList = playlist.subscribe(paint);
+  let playingNow: string | null = np.track?.path ?? null;
+  let wasPlaying = np.playing;
+  const offNp = np.subscribe(() => {
+    // Only when what plays (or whether it plays) changes, not as it plays.
+    if ((np.track?.path ?? null) === playingNow && np.playing === wasPlaying) return;
+    playingNow = np.track?.path ?? null;
+    wasPlaying = np.playing;
+    paint();
+  });
+  return () => {
+    offList();
+    offNp();
+    root.remove();
+  };
+}
+
+/** Drag a row by its handle (mouse or finger) to another place in the list. */
+function dragToMove(grip: HTMLElement, row: HTMLElement, list: HTMLElement, from: number, done: (to: number) => void): void {
+  grip.addEventListener('pointerdown', evt => {
+    evt.preventDefault();
+    evt.stopPropagation();
+    grip.setPointerCapture(evt.pointerId);
+    const rows = Array.from(list.children) as HTMLElement[];
+    const startY = evt.clientY;
+    let to = from;
+    row.addClass('is-dragging');
+    const move = (e: PointerEvent) => {
+      const dy = e.clientY - startY;
+      row.style.setProperty('--mo-drag', `${dy}px`);
+      const mid = row.getBoundingClientRect().top + row.offsetHeight / 2;
+      to = rows.filter((r, i) => i !== from && r.getBoundingClientRect().top + r.offsetHeight / 2 < mid).length;
+      rows.forEach((r, i) => {
+        if (i === from) return;
+        const shift = i > from && i <= to ? -row.offsetHeight : i < from && i >= to ? row.offsetHeight : 0;
+        r.style.setProperty('--mo-drag', `${shift}px`);
+      });
+    };
+    const up = () => {
+      grip.removeEventListener('pointermove', move);
+      grip.removeEventListener('pointerup', up);
+      grip.removeEventListener('pointercancel', up);
+      rows.forEach(r => r.style.removeProperty('--mo-drag'));
+      row.removeClass('is-dragging');
+      if (to !== from) done(to);
+    };
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', up);
+    grip.addEventListener('pointercancel', up);
+  });
+}
+
+/** The playlist over whatever is on screen (from the player bar, or the player). */
+export class PlaylistModal extends Modal {
+  private remove: (() => void) | null = null;
+
+  constructor(private readonly plugin: MediaTranscriptPlugin) {
+    super(plugin.app);
+  }
+
+  onOpen(): void {
+    this.modalEl.addClass('mo-pl-modal');
+    this.setTitle(t('library.tabPlaylist'));
+    this.remove = renderPlaylist(this.contentEl, this.plugin);
+  }
+
+  onClose(): void {
+    this.remove?.();
+    this.contentEl.empty();
+  }
 }
 
 /**
@@ -247,7 +486,7 @@ export class MiniPlayer {
 
   private paint(): void {
     const { np, el } = this;
-    const track = np.track;
+    const track: Track | null = np.track;
     if (this.bar) {
       this.bar.paint();
       if (track && !el.hasClass('is-hidden')) this.place();

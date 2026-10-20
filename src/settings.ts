@@ -3,6 +3,7 @@ import { MODULES } from './modules';
 import type MediaTranscriptPlugin from './main';
 import { parseFolderList } from './utils/mediaMatch';
 import { t } from './i18n';
+import type { QueueEntry } from './library/playlist';
 import { formatSize } from './utils/format';
 import { ConfirmModal } from './library/LibraryView';
 import {
@@ -58,6 +59,10 @@ export interface MediaTranscriptSettings {
   // ── Playback ─────────────────────────────────────────────────────────────
   autoScroll: boolean;      // keep the playing line centered in the transcript
   videoAudioOnly: boolean;  // play videos without showing the picture
+
+  // ── Media library ────────────────────────────────────────────────────────
+  // What plays next, in order: synced, so a phone goes on with a list made on the computer.
+  playlist: QueueEntry[];
 }
 
 export const DEFAULT_SETTINGS: MediaTranscriptSettings = {
@@ -77,6 +82,7 @@ export const DEFAULT_SETTINGS: MediaTranscriptSettings = {
   transcriptFontSize: 15,
   autoScroll: true,
   videoAudioOnly: false,
+  playlist: [],
 };
 
 // ── Settings Tab ──────────────────────────────────────────────────────────────
