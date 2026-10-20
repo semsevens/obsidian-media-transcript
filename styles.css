@@ -2052,53 +2052,60 @@ body.mo-fab-lifted .view-actions.mod-raised .view-action {
   font-size: var(--font-ui-small);
 }
 
-/* What is being said: most of the room. */
+/* What is being said: most of the room, the whole transcript, scrolled to follow. */
 .mo-np-lyrics {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
+  position: relative;
+  flex: 1 1 0;
   align-self: stretch;
-  gap: 18px;
-  min-height: 220px;
-  overflow: hidden;
-  padding: var(--size-4-4) var(--size-4-1);
-  cursor: pointer;
-  /* what does not fit fades out above and below */
-  mask-image: linear-gradient(to bottom, transparent 0, #000 12%, #000 88%, transparent 100%);
+  min-height: 200px;
+  overflow-y: auto;
+  padding: 24vh var(--size-4-1);
+  user-select: text;
+  -webkit-user-select: text;
+  overscroll-behavior: contain;
+  /* fading out above and below */
+  mask-image: linear-gradient(to bottom, transparent 0, #000 14%, #000 86%, transparent 100%);
+  scrollbar-width: none;
 }
 
-.mo-np-lyrics.is-empty {
-  visibility: hidden;
+.mo-np-lyrics::-webkit-scrollbar {
+  display: none;
+}
+
+.mo-np-lyrics-note {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--mo-np-dim);
+}
+
+.mo-np-lyrics-note.is-error {
+  color: var(--text-error);
 }
 
 .mo-np-lyric {
-  flex-shrink: 0;
-  color: rgba(255, 255, 255, 0.28);
-  font-size: 15px;
-  line-height: 1.5;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
-  transition: color 0.3s ease;
+  padding: 8px 0;
+  color: rgba(255, 255, 255, 0.38);
+  font-size: 17px;
+  line-height: 1.55;
+  cursor: pointer;
+  transition: color 0.25s ease;
 }
 
-.mo-np-lyric.is-near {
-  color: rgba(255, 255, 255, 0.45);
-  font-size: 16px;
+.mo-np-lyric:hover {
+  color: rgba(255, 255, 255, 0.6);
 }
 
 .mo-np-lyric.is-now {
   color: var(--mo-np-fg);
-  font-size: 23px;
+  font-size: 21px;
   font-weight: var(--font-semibold);
-  line-height: 1.45;
-  -webkit-line-clamp: 5;
 }
 
-.mo-np-lyric.is-error {
-  color: var(--text-error);
+.mo-np-lyric::selection {
+  background: rgba(240, 196, 25, 0.35);
 }
 
 .mo-np-seekrow {

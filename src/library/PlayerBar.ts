@@ -184,6 +184,69 @@ function renderWave(parent: HTMLElement, np: NowPlaying): { paint: () => void } 
 }
 
 const SLEEP = [15, 30, 60, 90];
+/** After the reader scrolls, leave the lines where they put them this long. */
+const HOLD_MS = 4000;
+
+/**
+ * The transcript in the player: every line, the one being said lit and kept
+ * in the middle (unless the reader has just scrolled), selectable, and a tap
+ * on a line plays from it.
+ */
+function renderLyrics(parent: HTMLElement, np: NowPlaying): { paint: () => void } {
+  const box = parent.createDiv('mo-np-lyrics');
+  const note = box.createDiv('mo-np-lyrics-note');
+  let shownFor: unknown = null;
+  let rows: HTMLElement[] = [];
+  let lit = -2;
+  let heldUntil = 0;
+  // Our own (smooth) scrolling fires scroll events for a while: not the reader's.
+  let ownUntil = 0;
+  const hold = () => {
+    heldUntil = Date.now() + HOLD_MS;
+  };
+  box.addEventListener('wheel', hold, { passive: true });
+  box.addEventListener('touchmove', hold, { passive: true });
+  box.addEventListener('scroll', () => {
+    if (Date.now() > ownUntil) hold();
+  }, { passive: true });
+  box.addEventListener('click', evt => {
+    // A selection made, not a tap.
+    if (window.getSelection()?.toString()) return;
+    const row = (evt.target as HTMLElement).closest<HTMLElement>('.mo-np-lyric');
+    if (!row?.dataset.start) return;
+    np.seek(Number(row.dataset.start));
+    heldUntil = 0;
+    if (!np.playing) np.toggle();
+  });
+  const center = (row: HTMLElement, smooth: boolean) => {
+    ownUntil = Date.now() + (smooth ? 800 : 100);
+    box.scrollTo({ top: row.offsetTop - box.clientHeight / 2 + row.offsetHeight / 2, behavior: smooth ? 'smooth' : 'auto' });
+  };
+  const paint = () => {
+    const { lines, now } = np.transcriptLines;
+    if (lines !== shownFor) {
+      shownFor = lines;
+      rows.forEach(r => r.remove());
+      rows = lines.map(l => {
+        const row = box.createDiv('mo-np-lyric');
+        row.dataset.start = String(l.startTime);
+        row.setText(l.text);
+        return row;
+      });
+      lit = -2;
+    }
+    note.setText(np.failed ? t('library.playerOffline') : lines.length ? '' : np.track?.transcript ? '' : t('library.playerNoTranscript'));
+    note.toggle(!!note.getText());
+    note.toggleClass('is-error', np.failed);
+    if (now === lit) return;
+    rows[lit]?.removeClass('is-now');
+    rows[now]?.addClass('is-now');
+    const first = lit === -2;
+    lit = now;
+    if (rows[now] && Date.now() > heldUntil) center(rows[now], !first);
+  };
+  return { paint };
+}
 
 /**
  * What is playing, in full (a phone: the whole screen): its cover, the line
@@ -234,15 +297,9 @@ export class NowPlayingModal extends Modal {
     const title = names.createDiv('mo-np-title');
     const subtitle = names.createDiv('mo-np-subtitle');
 
-    // Most of the room: what is being said, and around it. Tap to read along.
-    const lyrics = root.createDiv('mo-np-lyrics');
-    lyrics.setAttr('aria-label', t('library.playerReadAlong'));
-    lyrics.addEventListener('click', () => {
-      this.close();
-      void np.openTranscript();
-    });
-    const lines = [0, 1, 2, 3, 4].map(i => lyrics.createDiv(`mo-np-lyric${i === 2 ? ' is-now' : i === 1 || i === 3 ? ' is-near' : ''}`));
-    const line = lines[2];
+    // Most of the room: the transcript, following what is said, as the
+    // transcript view does: scroll it, select from it, tap a line to play from there.
+    const lyrics = renderLyrics(root, np);
 
     const seekRow = root.createDiv('mo-np-seekrow');
     const at = seekRow.createSpan('mo-np-at');
@@ -294,11 +351,7 @@ export class NowPlayingModal extends Modal {
       }
       title.setText(track.title);
       subtitle.setText([track.subtitle, np.local ? t('library.playerFromDevice') : ''].filter(Boolean).join(' · '));
-      const { text } = np.lines(2, 2);
-      lines.forEach((el, i) => el.setText(text[i]));
-      if (np.failed) line.setText(t('library.playerOffline'));
-      line.toggleClass('is-error', np.failed);
-      lyrics.toggleClass('is-empty', !track.transcript && !np.failed);
+      lyrics.paint();
       read.toggle(!!track.transcript);
       paintPlay(play, np.playing);
       const d = np.duration;

@@ -75,6 +75,11 @@ export class NowPlaying {
     return i >= 0 ? this.segments[i].text : '';
   }
 
+  /** Every line of its transcript (bracketed noise left out), and which is being said (-1 before the first). */
+  get transcriptLines(): { lines: SubtitleSegment[]; now: number } {
+    return { lines: this.segments, now: lineAt(this.segments, this.time) };
+  }
+
   /** `before` lines before the one being said, it, and `after` lines after ('' where there is none); and which is it. */
   lines(before: number, after: number): { text: string[]; now: number } {
     const i = lineAt(this.segments, this.time);
