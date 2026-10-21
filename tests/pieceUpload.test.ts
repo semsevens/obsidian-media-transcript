@@ -137,14 +137,19 @@ describe('uploadInPieces', () => {
     const send = server.client.uploadPiece.bind(server.client);
     let inFlight = 0;
     let failed = false;
+    let failNow = () => {};
+    const hasFailed = new Promise<void>(r => { failNow = r; });
     const startedWith: number[] = [];
     const order: number[] = [];
     server.client.uploadPiece = async (id, offset, data, sha) => {
-      // The first piece fails at once, before the others are all on their way.
+      // The first piece fails; the two sent beside it wait for that, so none
+      // finishes (and lets a fourth go) while three at once still holds.
       if (offset === 0 && !failed) {
         failed = true;
+        failNow();
         throw Object.assign(new Error('HTTP 503'), { status: 503 });
       }
+      if (offset !== 0 && offset / PIECE < 3) await hasFailed;
       inFlight++;
       startedWith.push(inFlight);
       order.push(offset / PIECE);
