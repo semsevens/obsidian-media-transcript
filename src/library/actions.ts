@@ -2,6 +2,7 @@ import { Notice, TFile, normalizePath } from 'obsidian';
 import type MediaTranscriptPlugin from '../main';
 import { rewriteNote, type LinkAt, type Target } from './links';
 import { t } from '../i18n';
+import type { LibraryFile } from './client';
 
 const nameOf = (path: string) => path.slice(path.lastIndexOf('/') + 1);
 const dirOf = (path: string) => (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
@@ -33,11 +34,26 @@ export async function renameMedia(plugin: MediaTranscriptPlugin, from: string, t
   plugin.mediaLocator.invalidate();
 }
 
-/** Move a media file to the server's trash (kept 30 days), and this device's copy to Obsidian's trash. */
+/**
+ * Move a media file to the server's trash (kept 30 days), and this device's
+ * copy and its transcripts in the vault to Obsidian's trash: the server trashes
+ * its own copy of the transcripts, but the vault's would stay and keep syncing.
+ */
 export async function deleteMedia(plugin: MediaTranscriptPlugin, vaultPath: string): Promise<void> {
   await plugin.library.delete(vaultPath);
   const local = plugin.app.vault.getAbstractFileByPath(vaultPath);
   if (local instanceof TFile) await plugin.app.fileManager.trashFile(local);
+  // A transcript found only by its name is shared with another file of that
+  // name (the video beside the audio): keep it while one is left.
+  const dir = dirOf(vaultPath);
+  const others: string[] = (await plugin.library.files().catch((): LibraryFile[] => [])).map(f => f.vaultPath);
+  for (const f of plugin.app.vault.getFiles()) others.push(f.path);
+  const exts = new Set([...plugin.settings.supportedAudioExtensions, ...plugin.settings.supportedVideoExtensions]);
+  await plugin.trashTranscripts(nameOf(vaultPath), dir, base => others.some(p => {
+    if (p === vaultPath || dirOf(p) !== dir) return false;
+    const n = nameOf(p);
+    return n.startsWith(base + '.') && exts.has(n.slice(base.length + 1).toLowerCase());
+  }));
   plugin.mediaLocator.invalidate();
 }
 

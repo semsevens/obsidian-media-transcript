@@ -300,10 +300,7 @@ export default class MediaTranscriptPlugin extends Plugin {
   async renameTranscripts(oldName: string, newName: string, dir: string) {
     const oldBase = oldName.replace(/\.[^.]+$/, '');
     const newBase = newName.replace(/\.[^.]+$/, '');
-    await this.transcripts.whenReady();
-    const tracks = new Set<TFile>(this.transcripts.transcriptsFor(oldName));
-    const searchDir = this.settings.subtitleDirectory.trim() || dir;
-    for (const track of findSubtitleTracks(oldBase, searchDir, this.app.vault)) tracks.add(track.file);
+    const tracks = await this.transcriptFilesFor(oldName, dir);
 
     let renamed = 0;
     const blocked: string[] = [];
@@ -326,6 +323,33 @@ export default class MediaTranscriptPlugin extends Plugin {
     if (blocked.length > 0) {
       new Notice(t('core.keptTranscripts', { names: blocked.join(', ') }));
     }
+  }
+
+  /** The transcripts of media `name`: those that name it as their source, and those named after it beside `dir`. */
+  private async transcriptFilesFor(name: string, dir: string): Promise<Set<TFile>> {
+    await this.transcripts.whenReady();
+    const tracks = new Set<TFile>(this.transcripts.transcriptsFor(name));
+    const searchDir = this.settings.subtitleDirectory.trim() || dir;
+    for (const track of findSubtitleTracks(name.replace(/\.[^.]+$/, ''), searchDir, this.app.vault)) tracks.add(track.file);
+    return tracks;
+  }
+
+  /**
+   * Move the transcripts of deleted media `name` to Obsidian's trash. One found
+   * only by its name is kept when `stillThere` (another file of that name, say
+   * the video beside the audio, which shares it) says so. Returns how many went.
+   */
+  async trashTranscripts(name: string, dir: string, stillThere: (base: string) => boolean): Promise<number> {
+    const base = name.replace(/\.[^.]+$/, '');
+    const keepByName = stillThere(base);
+    let trashed = 0;
+    for (const tr of await this.transcriptFilesFor(name, dir)) {
+      const ownSource = (await this.transcripts.sourceOf(tr))?.toLowerCase() === name.toLowerCase();
+      if (!ownSource && keepByName) continue;
+      await this.app.fileManager.trashFile(tr);
+      trashed++;
+    }
+    return trashed;
   }
 
   private hasSubtitles(file: TFile): boolean {
