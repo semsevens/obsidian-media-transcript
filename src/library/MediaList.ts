@@ -59,6 +59,8 @@ export interface MediaHost {
  */
 export class MediaList {
   private items: Item[] = [];
+  /** The index the items were built from, to build them again when the vault changes. */
+  private index: IndexEntry[] = [];
   /** All the server holds, audio twins too. */
   private totalSize = 0;
   private trash: TrashItem[] = [];
@@ -115,8 +117,39 @@ export class MediaList {
   }
 
   private show(index: IndexEntry[]): void {
+    this.index = index;
     this.items = this.build(index);
     this.totalSize = index.reduce((n, e) => n + e.size, 0);
+  }
+
+  /**
+   * Match the items to the vault again, without asking the server: a
+   * transcript written here or brought by Sync after the list was fetched.
+   * Returns whether a row now reads differently.
+   */
+  relink(): boolean {
+    if (!this.index.length) return false;
+    const before = new Map(this.items.map(i => [i.path, i.transcript]));
+    this.items = this.build(this.index);
+    let changed = false;
+    for (const i of this.items) {
+      if (before.get(i.path) === i.transcript) continue;
+      this.details.delete(i.path);  // read from the transcript that was
+      changed = true;
+    }
+    return changed;
+  }
+
+  /** Take in jobs seen since the list was fetched; returns whether a row now reads differently. */
+  takeJobs(jobs: Job[]): boolean {
+    let changed = false;
+    for (const j of jobs) {
+      const had = this.jobs.get(j.path);
+      if (had && had.changed > j.changed) continue;
+      if (had?.state !== j.state) changed = true;
+      this.jobs.set(j.path, j);
+    }
+    return changed;
   }
 
   private build(index: IndexEntry[]): Item[] {
@@ -420,7 +453,8 @@ export class MediaList {
 
     // Only what is out of the ordinary: a transcript is the rule.
     const job = this.jobs.get(it.path);
-    if (job && (job.state === 'queued' || job.state === 'claimed' || job.state === 'failed')) {
+    // A failed job is past once a transcript is there (made again, or by hand).
+    if (job && (job.state === 'queued' || job.state === 'claimed' || (job.state === 'failed' && !it.transcript))) {
       const label = job.state === 'queued' ? t('library.jobQueued') : job.state === 'claimed' ? t('library.jobClaimed') : t('library.jobFailed');
       const badge = meta.createSpan({ cls: `mo-lib-badge mo-lib-job-${job.state}`, text: label });
       if (job.error) badge.setAttr('title', job.error);

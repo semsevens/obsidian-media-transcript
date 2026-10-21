@@ -94,6 +94,22 @@ export class LibraryView extends ItemView {
     this.register(this.plugin.cache.subscribe(() => {
       if (this.tab === 'media') this.media.paintCache(this.listEl);
     }));
+    // A transcript arriving (written here, or brought by Sync) and a job
+    // moving on show in their row without a refresh. Several files of one
+    // transcript come at once: draw once for them.
+    let relinkTimer: number | null = null;
+    const relink = () => {
+      if (relinkTimer !== null) window.clearTimeout(relinkTimer);
+      relinkTimer = window.setTimeout(() => {
+        relinkTimer = null;
+        if (this.media.relink() && this.tab === 'media') this.renderList();
+      }, 1000);
+    };
+    this.register(() => { if (relinkTimer !== null) window.clearTimeout(relinkTimer); });
+    this.register(this.plugin.transcripts.onChange(relink));
+    this.register(this.plugin.transcriptSync.onJobs(() => {
+      if (this.media.takeJobs(this.plugin.transcriptSync.known) && this.tab === 'media') this.renderList();
+    }));
     await this.refresh();
   }
 

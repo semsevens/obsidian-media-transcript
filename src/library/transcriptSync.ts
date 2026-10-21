@@ -66,8 +66,9 @@ export class TranscriptSync {
   }
 
   /** Call `fn` whenever the known jobs change. */
-  onJobs(fn: () => void): void {
+  onJobs(fn: () => void): () => void {
     this.listeners.push(fn);
+    return () => { this.listeners = this.listeners.filter(f => f !== fn); };
   }
 
   remember(jobs: Job[]): void {

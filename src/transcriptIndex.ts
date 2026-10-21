@@ -57,7 +57,10 @@ export class TranscriptIndex {
   }
 
   /** Called once the first full index is ready (and again after later changes). */
-  onChange(fn: () => void) { this.listeners.push(fn); }
+  onChange(fn: () => void): () => void {
+    this.listeners.push(fn);
+    return () => { this.listeners = this.listeners.filter(f => f !== fn); };
+  }
 
   whenReady(): Promise<void> { return this.building ?? Promise.resolve(); }
 
@@ -197,6 +200,7 @@ export class TranscriptIndex {
     this.sources.delete(path);
     delete this.cache[path];
     this.scheduleSave();
+    this.notify();
   }
 
   private unlink(path: string) {
