@@ -5,6 +5,10 @@ import { parseSubtitle, type SubtitleSegment } from '../utils/subtitleParser';
 import { resumeAt } from './cachePolicy';
 import type { QueueEntry } from './playlist';
 import type { ResolvedMedia } from '../mediaLocator';
+import { PieceStream } from './pieceStream';
+
+/** What PieceStream can play: MP4 (the audio in it). */
+const MP4 = /\.(m4a|m4b|mp4|m4v|mov)$/i;
 
 /** What is played: a file on the server, and its transcript if the vault has one. */
 export interface Track {
@@ -40,6 +44,8 @@ export class NowPlaying {
   local = false;
   /** It could not be played (offline, and not on this device). */
   failed = false;
+  /** Playing from pieces, this device's and fetched as it plays (see PieceStream). */
+  private stream: PieceStream | null = null;
   /** Sleep timer: pause at this time (ms), or when this one ends; null: off. */
   sleep: number | 'end' | null = null;
 
@@ -51,6 +57,11 @@ export class NowPlaying {
       pauseAllBut(evt.target);
     }, true);
     plugin.register(() => this.stop());
+  }
+
+  /** Offline at a part of it this device doesn't have: it goes on when the line is back. */
+  get gap(): boolean {
+    return !!this.stream?.gap;
   }
 
   get playing(): boolean {
@@ -184,17 +195,62 @@ export class NowPlaying {
     // The vault's own file, when this device has it (it was recorded here, say):
     // nothing to fetch, nor to keep a second copy of.
     const own = this.onDevice(track.key);
-    void (own ? Promise.resolve(this.plugin.app.vault.getResourcePath(own)) : cache.url(track.key)).then(local => {
+    void (async () => {
+      const local = own ? this.plugin.app.vault.getResourcePath(own) : await cache.url(track.key);
+      if (this.audio !== audio) return;
+      // Not all here: played from pieces, those this device has and the others
+      // fetched as it plays, and kept. One download, for playing and keeping.
+      let streamed = false;
+      if (!local && cache.prefs.auto && PieceStream.supported() && MP4.test(track.key)) {
+        try {
+          const stream = await PieceStream.open(audio, cache.source({ path: track.key, url: track.url, size: track.size }),
+            () => this.streamChanged(audio, track), await this.durationOf(track));
+          if (this.audio !== audio) {
+            stream?.close();
+            return;
+          }
+          this.stream = stream;
+          streamed = !!stream;
+        } catch (e) {
+          // Its start is neither here nor reachable: the server address says so (failed).
+          console.warn('[media-one] could not play it a piece at a time:', e);
+        }
+      }
       if (this.audio !== audio) return;
       this.local = !!local;
-      audio.src = local ?? track.url;
+      if (!streamed) audio.src = local ?? track.url;
       audio.playbackRate = this.rate;
       cache.played(track.key, from, 0, true);
-      // Kept on this device too, to play offline next time.
-      if (!local) cache.auto({ path: track.key, url: track.url, size: track.size });
       this.changed();
       void audio.play().catch(() => this.changed());
-    });
+    })();
+  }
+
+  /** A gap came or went; or the browser wouldn't take the pieces: play it from the server as before. */
+  private streamChanged(audio: HTMLAudioElement, track: Track): void {
+    const stream = this.stream;
+    if (this.audio !== audio || !stream) return;
+    if (stream.broken) {
+      const at = audio.currentTime;
+      stream.close();
+      this.stream = null;
+      audio.src = track.url;
+      audio.addEventListener('loadedmetadata', () => { if (at > 0) audio.currentTime = at; }, { once: true });
+      void audio.play().catch(() => this.changed());
+    }
+    this.changed();
+  }
+
+  /** How long it is, as its transcript says (a fragmented recording may not say itself), or 0. */
+  private async durationOf(track: Track): Promise<number> {
+    const file = track.transcript;
+    if (!file || file.extension !== 'json') return 0;
+    try {
+      const d = (JSON.parse(await this.plugin.app.vault.cachedRead(file)) as { duration?: unknown }).duration;
+      return typeof d === 'number' && d > 0 ? d : 0;
+    } catch {
+      return 0;
+    }
   }
 
   /**
@@ -308,6 +364,8 @@ export class NowPlaying {
     this.audio = null;
     this.track = null;
     this.segments = [];
+    this.stream?.close();
+    this.stream = null;
     this.plugin.cache.playing = null;
     if (audio) {
       audio.pause();

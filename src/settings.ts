@@ -315,10 +315,6 @@ export class MediaTranscriptSettingTab extends PluginSettingTab {
       .setDesc(t('library.cacheAutoDesc'))
       .addToggle(toggle => toggle.setValue(prefs.auto).onChange(v => cache.setPrefs({ auto: v })));
     new Setting(containerEl)
-      .setName(t('library.cacheWifiOnly'))
-      .setDesc(t('library.cacheWifiOnlyDesc'))
-      .addToggle(toggle => toggle.setValue(prefs.wifiOnly).onChange(v => cache.setPrefs({ wifiOnly: v })));
-    new Setting(containerEl)
       .setName(t('library.cacheLimit'))
       .setDesc(t('library.cacheLimitDesc'))
       .addDropdown(d => {

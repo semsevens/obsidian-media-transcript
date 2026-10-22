@@ -107,7 +107,6 @@ export class MediaList {
       for (const j of jobs.jobs.sort((a, b) => a.created - b.created)) this.jobs.set(j.path, j);
       this.show(index);
       this.device.set('mediaIndex', index);
-      this.prefetch();
       this.error = null;
       this.retried = false;
     } catch (e) {
@@ -307,18 +306,6 @@ export class MediaList {
     return { path, url: this.plugin.library.libraryUrl(path), size: it.listen ? it.listenSize : it.size, added: it.added };
   }
 
-  /** New audio of this vault's own, and of collections listened to lately, fetched ahead to play offline. */
-  private prefetch(): void {
-    const { cache } = this.plugin;
-    const recent = Date.now() - 30 * 24 * 60 * 60 * 1000;
-    const listened = new Set(this.items.filter(it => (cache.statsOf(this.played(it))?.last ?? 0) > recent).map(it => it.collection));
-    cache.prefetch(this.items
-      .filter(it => !it.vaultPath || !(this.plugin.app.vault.getAbstractFileByPath(it.vaultPath) instanceof TFile))
-      .filter(it => it.collection === this.own || listened.has(it.collection))
-      .filter(it => !VIDEO_EXT.test(this.played(it)))
-      .map(it => this.fetchable(it)));
-  }
-
   /** Only what plays offline; download all shown here; how much this device keeps. */
   private renderOffline(list: HTMLElement, inView: Item[]): void {
     if (!this.plugin.cache.available) return;
@@ -371,9 +358,12 @@ export class MediaList {
       const e = cache.entry(path);
       const p = cache.progress(path);
       const done = cache.complete(path);
+      // A part kept (what was heard of it) says how much: that much plays offline.
+      const part = Math.floor(cache.share(path) * 100);
       const text = done ? t(e?.kind === 'kept' ? 'library.badgeKept' : 'library.badgeCached')
         : p?.active ? t('library.badgeDownloading', { percent: p.size ? Math.floor((p.have / p.size) * 100) : 0 })
-          : p && e?.kind === 'kept' ? t('library.badgeWaiting') : '';
+          : p && e?.kind === 'kept' ? t('library.badgeWaiting')
+            : part > 0 ? t('library.badgeCachedPart', { percent: Math.max(1, part) }) : '';
       if (badge.getText() !== text) badge.setText(text);
       badge.toggle(!!text);
       badge.toggleClass('is-kept', done && e?.kind === 'kept');

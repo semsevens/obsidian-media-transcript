@@ -11,6 +11,8 @@ export interface CacheEntry {
   kind: 'auto' | 'kept'; // kept: downloaded on purpose, never let go by itself
   added: number;         // ms since the epoch
   used: number;          // last played or opened, ms
+  piece?: number;        // bytes in each piece (512 KB; 8 MB for what was kept before)
+  got?: number[];        // the pieces this device has
 }
 
 /** How it has been listened to: kept for every file played, cached or not. */
@@ -28,6 +30,17 @@ export const IDLE_DAYS = 30;
 export const IN_PROGRESS_DAYS = 14;
 /** Over the limit, let go until this share of it is used. */
 export const TRIM_TO = 0.8;
+
+/** Pieces kept before they were known one by one (8 MB each): a run from the start. */
+export const OLD_PIECE = 8 * 1024 * 1024;
+
+/** An entry from before pieces were known one by one, as it is now: which pieces it has. */
+export function upgradeEntry(e: CacheEntry): CacheEntry {
+  if (e.got) return e;
+  const whole = e.size > 0 && e.have >= e.size;
+  const n = whole ? Math.ceil(e.size / OLD_PIECE) : Math.floor(e.have / OLD_PIECE);
+  return { ...e, piece: OLD_PIECE, got: Array.from({ length: n }, (_, i) => i), have: whole ? e.size : n * OLD_PIECE };
+}
 
 export function finished(s: PlayStats | undefined): boolean {
   return !!s && s.duration > 0 && s.position >= s.duration * 0.9;

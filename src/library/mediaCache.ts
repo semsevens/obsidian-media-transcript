@@ -1,32 +1,26 @@
 import { Notice, Platform, requestUrl } from 'obsidian';
-import { DAY_MS, toEvict, type CacheEntry, type PlayStats } from './cachePolicy';
+import { DAY_MS, toEvict, upgradeEntry, type CacheEntry, type PlayStats } from './cachePolicy';
 import { formatSize } from '../utils/format';
 import { t } from '../i18n';
 
 const STORE = 'media-one-media';
-const PIECE = 8 * 1024 * 1024;
+/**
+ * A piece: what is fetched in one request and kept as one. Small, so what
+ * plays starts soon over a slow line and a jump lands soon; files kept
+ * before (8 MB pieces) keep theirs.
+ */
+const PIECE = 512 * 1024;
 const GB = 1000 * 1000 * 1000;
 /** Room left free on the device, beyond what a download needs. */
 const SPARE = 512 * 1024 * 1024;
 const PREFIX = 'media-one:cache:';
-/** Prefetched by itself: added this recently, audio, no larger than this. */
-const PREFETCH_DAYS = 3;
-const PREFETCH_MAX = 300 * 1024 * 1024;
-/**
- * A piece fetched by itself taking longer than this (under some 200 KB/s: a
- * relay, a poor line) stops fetching by itself for SLOW_PAUSE_MS. It would
- * crowd out what is playing over the same line, for a copy that takes hours.
- */
-const SLOW_PIECE_MS = 40_000;
-const SLOW_PAUSE_MS = 60 * 60_000;
 const MIME: Record<string, string> = {
   m4a: 'audio/mp4', mp3: 'audio/mpeg', wav: 'audio/wav', aac: 'audio/aac', flac: 'audio/flac', ogg: 'audio/ogg', opus: 'audio/ogg',
   mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', mkv: 'video/x-matroska',
 };
 
 export interface CachePrefs {
-  auto: boolean;        // keep what is played, and fetch new audio ahead
-  wifiOnly: boolean;    // only fetch by itself on Wi-Fi
+  auto: boolean;        // keep what is played, as it plays (nothing is fetched ahead)
   limitGB: number;
 }
 
@@ -37,8 +31,11 @@ export interface Fetchable {
   size: number;
 }
 
-export interface Prefetchable extends Fetchable {
-  added: number;        // ms
+/** A file read a piece at a time: from this device when it has the piece, else fetched (and kept). */
+export interface PieceSource {
+  readonly size: number;
+  readonly pieceSize: number;
+  piece(i: number): Promise<Uint8Array>;
 }
 
 interface Job extends Fetchable {
@@ -47,13 +44,16 @@ interface Job extends Fetchable {
 
 /**
  * Media kept on this device to play without the server: what was played
- * (kept by itself, let go again when space is short) and what was downloaded
- * on purpose (kept until removed). In the app's own storage, not the vault,
- * so Obsidian Sync and iCloud never see it; for the device, not for one vault
- * (the files are the server's, whichever vault plays them).
+ * (kept as it played, the parts heard; let go again when space is short) and
+ * what was downloaded on purpose (kept until removed). Nothing is fetched
+ * ahead by itself. In the app's own storage, not the vault, so Obsidian Sync
+ * and iCloud never see it; for the device, not for one vault (the files are
+ * the server's, whichever vault plays them).
  *
- * Fetched a piece at a time, so a download broken off (the phone put away)
- * goes on from where it was.
+ * Kept a piece at a time, any piece in any order: a download broken off (the
+ * phone put away) goes on from where it was, and what plays (see
+ * PieceStream) reads the pieces it has here and fetches the others once,
+ * for playing and keeping alike.
  */
 export class MediaCache {
   private entries: Record<string, CacheEntry>;
@@ -63,13 +63,14 @@ export class MediaCache {
   private cancelled = new Set<string>();
   private urls = new Map<string, string>();
   private listeners = new Set<() => void>();
-  private prefetched = 0;
+  private fetching = new Map<string, Promise<Uint8Array>>();
   /** What is playing, never let go. */
   playing: string | null = null;
 
   constructor(private readonly server: () => string) {
     this.entries = read('entries', {});
     this.stats = read('stats', {});
+    for (const [path, e] of Object.entries(this.entries)) this.entries[path] = upgradeEntry(e);
   }
 
   /** Whether this device can keep media at all. */
@@ -78,14 +79,13 @@ export class MediaCache {
   }
 
   get prefs(): CachePrefs {
-    return { auto: true, wifiOnly: true, limitGB: Platform.isMobile ? 2 : 5, ...read<Partial<CachePrefs>>('prefs', {}) };
+    return { auto: true, limitGB: Platform.isMobile ? 2 : 5, ...read<Partial<CachePrefs>>('prefs', {}) };
   }
 
   setPrefs(change: Partial<CachePrefs>): void {
     write('prefs', { ...read<Partial<CachePrefs>>('prefs', {}), ...change });
     this.changed();
     void this.trim();
-    if (change.auto || change.wifiOnly === false) this.resume();
   }
 
   get limit(): number {
@@ -104,7 +104,84 @@ export class MediaCache {
 
   complete(path: string): boolean {
     const e = this.entries[path];
-    return !!e && e.size > 0 && e.have >= e.size;
+    return !!e && e.size > 0 && (e.got?.length ?? 0) >= countOf(e);
+  }
+
+  /** How much of it this device has, 0–1. */
+  share(path: string): number {
+    const e = this.entries[path];
+    return e && e.size > 0 ? Math.min(1, e.have / e.size) : 0;
+  }
+
+  /** Whether this device has the bytes at `offset` of it. */
+  hasAt(path: string, offset: number): boolean {
+    const e = this.entries[path];
+    return !!e?.got?.includes(Math.floor(offset / pieceOf(e)));
+  }
+
+  /** It read a piece at a time, this device's pieces first (see PieceSource). Kept as it is read. */
+  source(f: Fetchable): PieceSource {
+    const entry = () => this.entries[f.path];
+    return {
+      get size() { return entry()?.size || f.size; },
+      get pieceSize() { return pieceOf(entry()); },
+      piece: i => this.piece(f, i, 'auto'),
+    };
+  }
+
+  /** Piece `i` of it: from this device, or fetched once and kept. */
+  async piece(f: Fetchable, i: number, kind: CacheEntry['kind']): Promise<Uint8Array> {
+    const key = `${f.path}\n${i}`;
+    const going = this.fetching.get(key);
+    if (going) return going;
+    const work = this.getPiece(f, i, kind).finally(() => this.fetching.delete(key));
+    this.fetching.set(key, work);
+    return work;
+  }
+
+  private async getPiece(f: Fetchable, i: number, kind: CacheEntry['kind']): Promise<Uint8Array> {
+    const now = Date.now();
+    const e = (this.entries[f.path] ??= { path: f.path, size: f.size, have: 0, kind, added: now, used: now, piece: PIECE, got: [] });
+    const size = pieceOf(e);
+    const store = this.available ? await caches.open(STORE) : null;
+    if (e.got?.includes(i) && store) {
+      const r = await store.match(pieceKey(f.path, i));
+      if (r) return new Uint8Array(await r.arrayBuffer());
+      // Gone from under us (the system cleared the app's storage).
+      e.got = e.got.filter(n => n !== i);
+      e.have = Math.max(0, e.have - size);
+    }
+    const from = i * size;
+    const to = (e.size ? Math.min(e.size, from + size) : from + size) - 1;
+    const r = await requestUrl({ url: f.url || this.urlOf(f.path), headers: { Range: `bytes=${from}-${to}` }, throw: false });
+    if (r.status !== 206 && r.status !== 200) throw Object.assign(new Error(`HTTP ${r.status}`), { status: r.status });
+    const total = r.status === 206 ? Number(/\/(\d+)$/.exec(header(r.headers, 'content-range') ?? '')?.[1]) : r.arrayBuffer.byteLength;
+    if (total) e.size = total;
+    const body = new Uint8Array(r.status === 200 ? r.arrayBuffer.slice(from, from + size) : r.arrayBuffer);
+    if (body.byteLength === 0) throw new Error('empty piece');
+    // Not kept (it plays all the same) when this device keeps nothing, or there is no room.
+    if (store && this.entries[f.path] === e && (e.kind === 'kept' || this.prefs.auto)) {
+      await store.put(pieceKey(f.path, i), new Response(body));
+      if (!e.got!.includes(i)) {
+        e.got!.push(i);
+        e.have = Math.min(e.size || Infinity, e.have + body.byteLength);
+      }
+      e.used = Date.now();
+      this.save();
+      this.changed();
+      if (this.usage().total > this.limit) this.trimSoon();
+    }
+    return body;
+  }
+
+  private trimTimer: number | null = null;
+
+  private trimSoon(): void {
+    if (this.trimTimer !== null) return;
+    this.trimTimer = window.setTimeout(() => {
+      this.trimTimer = null;
+      void this.trim();
+    }, 5000);
   }
 
   /** Being fetched now (with how far), waiting to be, or neither. */
@@ -155,7 +232,7 @@ export class MediaCache {
     try {
       const store = await caches.open(STORE);
       const pieces: Blob[] = [];
-      for (let i = 0; i * PIECE < e.size; i++) {
+      for (let i = 0; i < countOf(e); i++) {
         const r = await store.match(pieceKey(path, i));
         if (!r) throw new Error('missing piece');
         pieces.push(await r.blob());
@@ -168,6 +245,7 @@ export class MediaCache {
     } catch {
       // Gone from under us (the system cleared the app's storage): fetch it again when asked.
       e.have = 0;
+      e.got = [];
       this.save();
       return null;
     }
@@ -202,36 +280,18 @@ export class MediaCache {
     void this.run();
   }
 
-  /** Played: keep it too, by itself, where allowed. */
-  auto(f: Fetchable): void {
-    if (!this.mayFetchByItself() || this.entries[f.path] && this.complete(f.path)) return;
-    if (this.active?.path === f.path || this.queue.some(j => j.path === f.path)) return;
-    this.queue.push({ ...f, kind: 'auto' });
-    void this.run();
-  }
-
-  /** New audio, fetched ahead on Wi-Fi so it plays offline: the latest first, while there is room. */
-  prefetch(items: Prefetchable[]): void {
-    if (!this.mayFetchByItself()) return;
-    const since = Date.now() - PREFETCH_DAYS * DAY_MS;
-    const room = this.limit * 0.3;
-    for (const it of [...items].sort((a, b) => b.added - a.added)) {
-      if (it.added < since) break;
-      if (it.size > PREFETCH_MAX || this.entries[it.path] || this.stats[it.path]) continue;
-      if (this.prefetched + it.size > room || this.usage().total + it.size > this.limit * 0.8) break;
-      this.prefetched += it.size;
-      this.auto(it);
-    }
-  }
-
-  /** Go on with downloads broken off. */
+  /**
+   * Go on with downloads broken off; let go what was fetched ahead by itself
+   * before nothing was (an older version), and never played.
+   */
   resume(): void {
     for (const e of Object.values(this.entries)) {
-      if (this.complete(e.path) || e.size === 0) continue;
-      if (e.kind === 'auto' && !this.mayFetchByItself()) continue;
-      const f = { path: e.path, url: this.urlOf(e.path), size: e.size };
-      if (e.kind === 'kept') this.keep(f);
-      else this.auto(f);
+      if (e.kind === 'auto' && !this.stats[e.path]) {
+        void this.remove(e.path);
+        continue;
+      }
+      if (e.kind !== 'kept' || this.complete(e.path) || e.size === 0) continue;
+      this.keep({ path: e.path, url: this.urlOf(e.path), size: e.size });
     }
   }
 
@@ -251,7 +311,7 @@ export class MediaCache {
     this.urls.delete(path);
     if (e && this.available) {
       const store = await caches.open(STORE);
-      for (let i = 0; i * PIECE < Math.max(e.size, e.have, 1); i++) await store.delete(pieceKey(path, i));
+      for (const i of e.got ?? []) await store.delete(pieceKey(path, i));
     }
     this.changed();
   }
@@ -271,19 +331,6 @@ export class MediaCache {
     if (total > this.limit) {
       this.warnOnce('overLimit', t('library.cacheOverLimit', { used: formatSize(kept), limit: formatSize(this.limit) }));
     }
-  }
-
-  /** Until when fetching by itself waits: the line was found too slow. */
-  private slowUntil = 0;
-
-  private mayFetchByItself(): boolean {
-    const { auto, wifiOnly } = this.prefs;
-    if (!auto || !this.available || !navigator.onLine) return false;
-    if (Date.now() < this.slowUntil) return false;
-    if (this.usage().total >= this.limit) return false;
-    const c = (navigator as Navigator & { connection?: { type?: string; saveData?: boolean } }).connection;
-    if (wifiOnly && (c?.type === 'cellular' || c?.saveData)) return false;
-    return true;
   }
 
   private urlOf(path: string): string {
@@ -309,44 +356,25 @@ export class MediaCache {
     }
   }
 
+  /** A download asked for: every piece this device doesn't have yet. */
   private async fetch(job: Job): Promise<void> {
-    const store = await caches.open(STORE);
     const now = Date.now();
-    const e = (this.entries[job.path] ??= { path: job.path, size: job.size, have: 0, kind: job.kind, added: now, used: now });
-    if (job.kind === 'kept') e.kind = 'kept';
+    const e = (this.entries[job.path] ??= { path: job.path, size: job.size, have: 0, kind: job.kind, added: now, used: now, piece: PIECE, got: [] });
+    e.kind = 'kept';
     if (!e.size) e.size = job.size;
     // Room on the device for it.
     const free = await freeSpace();
-    if (free !== null && free < (e.size || PIECE) - e.have + SPARE) {
+    if (free !== null && free < (e.size || pieceOf(e)) - e.have + SPARE) {
       if (e.have === 0) delete this.entries[job.path];
       this.save();
-      if (job.kind === 'kept') new Notice(t('library.cacheNoRoom', { name: nameOf(job.path), free: formatSize(free) }));
-      else this.warnOnce('lowSpace', t('library.cacheLowSpace', { free: formatSize(free) }));
+      new Notice(t('library.cacheNoRoom', { name: nameOf(job.path), free: formatSize(free) }));
       return;
     }
     void navigator.storage?.persist?.().catch(() => false);
-    // Pieces are whole PIECE-sized ranges: what is there already is kept.
-    e.have = Math.floor(e.have / PIECE) * PIECE;
-    while (!e.size || e.have < e.size) {
-      if (this.cancelled.has(job.path)) return;
-      if (e.kind === 'auto' && !this.mayFetchByItself()) return;
-      const end = e.have + PIECE - 1;
-      const began = Date.now();
-      const r = await requestUrl({ url: job.url || this.urlOf(job.path), headers: { Range: `bytes=${e.have}-${end}` }, throw: false });
-      if (r.status !== 206 && r.status !== 200) throw new Error(`HTTP ${r.status}`);
-      const total = r.status === 206 ? Number(/\/(\d+)$/.exec(header(r.headers, 'content-range') ?? '')?.[1]) : r.arrayBuffer.byteLength;
-      if (total) e.size = total;
-      const body = r.status === 200 ? r.arrayBuffer.slice(e.have, e.have + PIECE) : r.arrayBuffer;
-      await store.put(pieceKey(job.path, e.have / PIECE), new Response(body));
-      e.have = Math.min(e.size, e.have + body.byteLength);
-      if (body.byteLength === 0) throw new Error('empty piece');
-      this.save();
-      this.changed();
-      // What it fetched is kept; the rest waits for a better line (or a download asked for).
-      if (e.kind === 'auto' && e.have < e.size && Date.now() - began > SLOW_PIECE_MS) {
-        this.slowUntil = Date.now() + SLOW_PAUSE_MS;
-        return;
-      }
+    for (let i = 0; !e.size || i < countOf(e); i++) {
+      if (this.cancelled.has(job.path) || this.entries[job.path] !== e) return;
+      if (e.got?.includes(i)) continue;
+      await this.piece(job, i, 'kept');
     }
     e.used = Date.now();
     this.save();
@@ -387,6 +415,14 @@ export class MediaCache {
     for (const url of this.urls.values()) URL.revokeObjectURL(url);
     this.urls.clear();
   }
+}
+
+function pieceOf(e: CacheEntry | undefined): number {
+  return e?.piece ?? PIECE;
+}
+
+function countOf(e: CacheEntry): number {
+  return Math.ceil(e.size / pieceOf(e));
 }
 
 function pieceKey(path: string, i: number): string {

@@ -114,8 +114,8 @@ export function renderBar(parent: HTMLElement, plugin: MediaTranscriptPlugin, cl
     ring.paint();
     title.setText(track.title);
     const d = np.duration;
-    line.setText(np.failed ? t('library.playerOffline') : d ? `${formatDuration(np.time)} / ${formatDuration(d)}` : formatDuration(np.time));
-    line.toggleClass('is-error', np.failed);
+    line.setText(np.failed ? t('library.playerOffline') : np.gap ? t('library.playerGap') : d ? `${formatDuration(np.time)} / ${formatDuration(d)}` : formatDuration(np.time));
+    line.toggleClass('is-error', np.failed || np.gap);
   };
   paint();
   const unsubscribe = np.subscribe(paint);
@@ -235,9 +235,9 @@ function renderLyrics(parent: HTMLElement, np: NowPlaying): { paint: () => void 
       });
       lit = -2;
     }
-    note.setText(np.failed ? t('library.playerOffline') : lines.length ? '' : np.track?.transcript ? '' : t('library.playerNoTranscript'));
+    note.setText(np.failed ? t('library.playerOffline') : np.gap ? t('library.playerGap') : lines.length ? '' : np.track?.transcript ? '' : t('library.playerNoTranscript'));
     note.toggle(!!note.getText());
-    note.toggleClass('is-error', np.failed);
+    note.toggleClass('is-error', np.failed || np.gap);
     if (now === lit) return;
     rows[lit]?.removeClass('is-now');
     rows[now]?.addClass('is-now');

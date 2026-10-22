@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DAY_MS, resumeAt, toEvict, type CacheEntry, type PlayStats } from '../src/library/cachePolicy';
+import { DAY_MS, OLD_PIECE, resumeAt, toEvict, upgradeEntry, type CacheEntry, type PlayStats } from '../src/library/cachePolicy';
 
 const MB = 1024 * 1024;
 const now = 100 * DAY_MS;
@@ -50,5 +50,25 @@ describe('resumeAt', () => {
     expect(resumeAt(stats(5, 1200, 1, 0))).toBe(0);
     expect(resumeAt(stats(1195, 1200, 1, 0))).toBe(0);
     expect(resumeAt(undefined)).toBe(0);
+  });
+});
+
+describe('upgradeEntry', () => {
+  it('a whole file kept in 8 MB pieces has them all, the last one short', () => {
+    const e = upgradeEntry(entry('a', 20, 1));
+    expect(e.piece).toBe(OLD_PIECE);
+    expect(e.got).toEqual([0, 1, 2]);
+    expect(e.have).toBe(20 * MB);
+  });
+
+  it('a download broken off has the whole pieces from the start, not the one cut short', () => {
+    const e = upgradeEntry({ ...entry('a', 20, 1), have: 10 * MB });
+    expect(e.got).toEqual([0]);
+    expect(e.have).toBe(8 * MB);
+  });
+
+  it('leaves alone what knows its pieces already', () => {
+    const e = { ...entry('a', 1, 1), piece: 512 * 1024, got: [3] };
+    expect(upgradeEntry(e)).toBe(e);
   });
 });
