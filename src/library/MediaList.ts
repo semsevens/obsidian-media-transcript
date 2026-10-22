@@ -115,6 +115,12 @@ export class MediaList {
     }
   }
 
+  /** Is this library file backed up? null: not in the index as last fetched. */
+  backedUp(path: string): boolean | null {
+    const e = this.index.find(x => x.path === path);
+    return e ? !!e.backup && Object.keys(e.backup).length > 0 : null;
+  }
+
   private show(index: IndexEntry[]): void {
     this.index = index;
     this.items = this.build(index);

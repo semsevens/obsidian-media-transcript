@@ -36,6 +36,10 @@ export interface Job {
   created: number;       // seconds since the epoch, server time
   finished?: number | null;
   changed: number;
+  claimed?: number;      // when the worker took it (server time)
+  heartbeat?: number;    // when the worker last said it is on it
+  /** How far the worker is: seconds of audio done, of how many; running, or waiting its turn there. */
+  progress?: { sec?: number; duration?: number; running: boolean };
 }
 
 /** A file in the web archive on the server. */

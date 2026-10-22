@@ -2437,14 +2437,13 @@ body.mo-fab-lifted .view-actions.mod-raised .view-action {
 }
 
 
-/* An upload under way: a small item in the status bar, a row atop the library. */
+/* An upload under way: a small item in the status bar. What is under way, atop the library. */
 .mo-upload-status {
   gap: var(--size-2-2);
   font-variant-numeric: tabular-nums;
 }
 
-.mo-upload-status.is-hidden,
-.mo-lib-upload.is-hidden {
+.mo-upload-status.is-hidden {
   display: none;
 }
 
@@ -2461,38 +2460,55 @@ body.mo-fab-lifted .view-actions.mod-raised .view-action {
   color: var(--text-warning);
 }
 
-.mo-lib-upload {
-  display: flex;
-  align-items: center;
-  gap: var(--size-4-2);
+.mo-act {
   margin: var(--size-4-2) 0 0;
-  padding: var(--size-4-2) var(--size-4-3);
+  padding: var(--size-4-1) var(--size-4-3) var(--size-4-2);
   border-radius: var(--radius-m);
   background: var(--background-secondary);
 }
 
-.mo-lib-upload-icon {
+.mo-act.is-hidden {
+  display: none;
+}
+
+.mo-act-head {
   display: flex;
-  color: var(--interactive-accent);
+  align-items: center;
+  gap: var(--size-2-2);
+  padding: var(--size-2-2) 0;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
 }
 
-.mo-lib-upload.is-waiting .mo-lib-upload-icon {
-  color: var(--text-warning);
+.mo-act-caret {
+  display: flex;
 }
 
-.mo-lib-upload-body {
-  flex: 1;
-  min-width: 0;
+.mo-act-caret svg {
+  width: 14px;
+  height: 14px;
 }
 
-.mo-lib-upload-name {
+.mo-act-item {
+  padding: var(--size-4-1) 0;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.mo-act-name {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
   font-size: var(--font-ui-small);
+  cursor: pointer;
 }
 
-.mo-lib-upload-track {
+.mo-act-item.is-finished .mo-act-name {
+  color: var(--text-muted);
+}
+
+.mo-act-track {
   height: 4px;
   margin: 6px 0 4px;
   border-radius: 2px;
@@ -2500,21 +2516,73 @@ body.mo-fab-lifted .view-actions.mod-raised .view-action {
   overflow: hidden;
 }
 
-.mo-lib-upload-fill {
+.mo-act-fill {
   height: 100%;
-  width: calc(var(--mo-upload, 0) * 100%);
+  width: calc(var(--mo-act, 0) * 100%);
   background: var(--interactive-accent);
   transition: width 0.4s ease;
 }
 
-.mo-lib-upload.is-waiting .mo-lib-upload-fill {
-  background: var(--text-warning);
+.mo-act-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--size-4-3);
+  margin-top: 2px;
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
 }
 
-.mo-lib-upload-detail {
+.mo-act-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-faint);
+}
+
+.mo-act-step-icon {
+  display: flex;
+}
+
+.mo-act-step-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.mo-act-step.is-done {
+  color: var(--text-muted);
+}
+
+.mo-act-step.is-done .mo-act-step-icon {
+  color: var(--color-green);
+}
+
+.mo-act-step.is-active {
+  color: var(--text-accent);
+  font-weight: var(--font-medium);
+}
+
+.mo-act-step.is-failed {
+  color: var(--text-error);
+}
+
+.mo-act-detail {
+  margin-top: 2px;
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
   font-variant-numeric: tabular-nums;
+}
+
+.mo-act-detail.is-error {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
+}
+
+.mo-act-more {
+  margin-top: var(--size-4-1);
+  font-size: var(--font-ui-smaller);
 }
 
 /* A transcript following the library's player: its bar in place of a player of its own. */

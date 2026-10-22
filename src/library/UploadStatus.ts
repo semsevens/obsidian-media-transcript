@@ -46,7 +46,7 @@ export function describe(s: UploadStatus, now = Date.now()): { short: string; de
  * Shows what is being uploaded without getting in the way: a small item in
  * the status bar on a computer (hover for the detail, click for the library);
  * on a phone, which has no status bar, a brief note when an upload begins.
- * The library shows it in full on either (see renderUploadRow).
+ * The library shows it in full on either (see ActivityPanel).
  */
 export class UploadIndicator {
   private readonly el: HTMLElement | null = null;
@@ -88,34 +88,4 @@ export class UploadIndicator {
     this.el.setAttribute('aria-label', `${t('library.uploadTitle', { name: s.name })}\n${detail}`);
     this.el.setAttribute('data-tooltip-position', 'top');
   }
-}
-
-/** The upload under way, at the top of the library: name, a bar, how far and how long. */
-export function renderUploadRow(parent: HTMLElement, plugin: MediaTranscriptPlugin): () => void {
-  const row = parent.createDiv('mo-lib-upload is-hidden');
-  setIcon(row.createDiv('mo-lib-upload-icon'), 'upload');
-  const body = row.createDiv('mo-lib-upload-body');
-  const name = body.createDiv('mo-lib-upload-name');
-  const track = body.createDiv('mo-lib-upload-track');
-  track.createDiv('mo-lib-upload-fill');
-  const detail = body.createDiv('mo-lib-upload-detail');
-  const paint = () => {
-    const s = plugin.uploader.status;
-    row.toggleClass('is-hidden', !s);
-    if (!s) return;
-    row.toggleClass('is-waiting', s.state === 'waiting');
-    name.setText(t('library.uploadTitle', { name: s.name }));
-    row.style.setProperty('--mo-upload', String(s.size ? s.sent / s.size : 0));
-    detail.setText(describe(s).detail);
-  };
-  const off = plugin.uploader.subscribe(paint);
-  const timer = window.setInterval(() => {
-    if (plugin.uploader.status && plugin.uploader.status.state !== 'checking') paint();
-  }, 5000);
-  paint();
-  return () => {
-    off();
-    window.clearInterval(timer);
-    row.remove();
-  };
 }

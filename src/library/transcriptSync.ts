@@ -7,7 +7,7 @@ import { DeviceState } from './deviceState';
 const EVERY_MS = 2 * 60_000;
 // On a phone, leave a fresh transcript to the computer for a while: two
 // devices writing the same new file at once makes Obsidian Sync keep both.
-const PHONE_DELAY_S = 30 * 60;
+export const PHONE_DELAY_S = 30 * 60;
 // Clocks differ and jobs finish between polls: look back a little.
 const OVERLAP_S = 120;
 
