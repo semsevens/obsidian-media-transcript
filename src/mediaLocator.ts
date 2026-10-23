@@ -114,6 +114,8 @@ export class MediaLocator {
   private unreachableSince = new Map<string, number>(); // remote base → when it last timed out
   private serverIndexes = new Map<string, ServerIndex>();
   private fetchingIndexes = new Map<string, Promise<ServerIndex | null>>();
+  // Bumped on invalidate: a download begun before (a rename since, say) is not kept.
+  private generation = 0;
 
   constructor(
     private app: App,
@@ -129,6 +131,8 @@ export class MediaLocator {
     this.external.clear();
     this.unreachableSince.clear();
     this.serverIndexes.clear();
+    this.fetchingIndexes.clear();
+    this.generation++;
   }
 
   /** List external folders in the background so the first open is instant. */
@@ -315,7 +319,8 @@ export class MediaLocator {
       if (since !== undefined && Date.now() - since < REMOTE_RETRY_AFTER_MS) return null;
       job = this.fetchIndex(base);
       this.fetchingIndexes.set(base, job);
-      void job.finally(() => this.fetchingIndexes.delete(base));
+      const mine = job;
+      void job.finally(() => { if (this.fetchingIndexes.get(base) === mine) this.fetchingIndexes.delete(base); });
     }
     // Everything looking at once shares one download. Waiting is capped, but
     // the download carries on: if it arrives late it is kept and the server
@@ -330,6 +335,7 @@ export class MediaLocator {
   }
 
   private async fetchIndex(base: string): Promise<ServerIndex | null> {
+    const generation = this.generation;
     // A plain file server sends no caching rules, so without no-cache the
     // index can be answered from a stale copy and point at moved files.
     const res = await requestUrl({ url: remotePathUrl(base, 'index.json'), headers: { 'Cache-Control': 'no-cache' }, throw: false })
@@ -340,7 +346,7 @@ export class MediaLocator {
     }
     this.unreachableSince.delete(base);
     const server = { fetchedAt: Date.now(), index: res.status === 200 ? parseRemoteIndex(res.text) : null };
-    this.serverIndexes.set(base, server);
+    if (generation === this.generation) this.serverIndexes.set(base, server);
     return server;
   }
 
