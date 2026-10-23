@@ -10,6 +10,8 @@ export interface LibraryFile {
   names: string[];
   added?: string;
   renamed?: string;
+  /** As it first came, before any rename: <vault folder>/<path then>. */
+  original?: { path: string; size?: number };
   backup?: Record<string, string>;   // where a backup holds it → since when
 }
 

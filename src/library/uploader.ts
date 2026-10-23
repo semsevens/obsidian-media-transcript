@@ -1,6 +1,6 @@
 import { FileSystemAdapter, Notice, Platform, TAbstractFile, TFile } from 'obsidian';
 import type MediaTranscriptPlugin from '../main';
-import { sha256Hex } from './client';
+import { sha256Hex, type LibraryFile } from './client';
 import { DeviceState } from './deviceState';
 import { ASK_PIECE, streamSource, uploadInPieces, type PieceSource } from './pieceUpload';
 import { fileSource } from './streamUpload';
@@ -127,16 +127,22 @@ export class Uploader {
   async sweep(): Promise<number> {
     if (!this.enabled()) return 0;
     const since = this.since();
-    const fresh = this.plugin.app.vault.getFiles().filter(f =>
-      this.wanted(f) && f.stat.ctime >= since && !this.pending.includes(f.path));
-    if (fresh.length === 0) return 0;
-    let onServer: Set<string>;
+    const media = this.plugin.app.vault.getFiles().filter(f => this.wanted(f) && !this.pending.includes(f.path));
+    if (media.length === 0) return 0;
+    let files: LibraryFile[];
     try {
-      onServer = new Set((await this.plugin.library.files()).map(e => e.vaultPath));
+      files = await this.plugin.library.files();
     } catch {
       return 0;  // the server isn't there: the next round
     }
-    const missing = fresh.filter(f => !onServer.has(f.path)).map(f => f.path);
+    const onServer = new Set(files.map(e => e.vaultPath));
+    const missing: string[] = [];
+    for (const f of media) {
+      if (onServer.has(f.path)) continue;
+      // Renamed on another device: whenever it came, it takes the new name.
+      if (await this.followRename(f, files)) continue;
+      if (f.stat.ctime >= since) missing.push(f.path);
+    }
     if (missing.length) this.adopt(missing);
     return missing.length;
   }
@@ -210,6 +216,12 @@ export class Uploader {
     const file = vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) return 'done';
     if (!(await this.settled(file))) return 'retry';
+    // Renamed on the server since it was queued (from another device): renamed here too, not sent again.
+    try {
+      if (await this.followRename(file, await this.plugin.library.files())) return 'done';
+    } catch {
+      return 'retry';
+    }
     const adapter = vault.adapter;
     const large = file.stat.size > STREAM_FROM;
     const size = file.stat.size;
@@ -267,6 +279,25 @@ export class Uploader {
       }
       return 'retry';
     }
+  }
+
+  /**
+   * This device's copy of a file the server has under another name: renamed
+   * on another device, where this copy isn't (media isn't synced). Given the
+   * server's name here too, rather than uploaded again as a new file.
+   */
+  private async followRename(file: TFile, files: LibraryFile[]): Promise<boolean> {
+    const was = `${this.plugin.library.folder}/${file.path}`;
+    const now = files.find(e => e.original?.path === was && e.vaultPath !== file.path && e.size === file.stat.size);
+    if (!now) return false;
+    const { vault, fileManager } = this.plugin.app;
+    if (vault.getAbstractFileByPath(now.vaultPath)) return false;
+    const dir = now.vaultPath.includes('/') ? now.vaultPath.slice(0, now.vaultPath.lastIndexOf('/')) : '';
+    if (dir && !vault.getAbstractFileByPath(dir)) await vault.createFolder(dir);
+    const from = file.name;
+    await fileManager.renameFile(file, now.vaultPath);
+    new Notice(t('library.followedRename', { from, to: now.vaultPath }));
+    return true;
   }
 
   /** Wait until the file stops growing (a recording being written, a copy in progress). */

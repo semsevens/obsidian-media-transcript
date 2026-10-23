@@ -182,6 +182,7 @@ const en = {
   'library.unreachable': 'The Media One server cannot be reached.',
   'library.noServer': 'No Media One server is set.',
   'library.uploaded': 'Uploaded {name} to the Media One server',
+  'library.followedRename': 'Renamed on another device: {from} is now {to}',
   'library.uploadConflict': 'Media One: the server already has a different {name} at {path}; not uploaded.',
 } as const;
 
@@ -368,6 +369,7 @@ const zh: Partial<Record<keyof typeof en, string>> = {
   'library.unreachable': '无法连接 Media One 服务器。',
   'library.noServer': '尚未设置 Media One 服务器。',
   'library.uploaded': '已将 {name} 上传到 Media One 服务器',
+  'library.followedRename': '已在另一台设备改名：{from} → {to}',
   'library.uploadConflict': 'Media One：服务器在 {path} 已有另一个不同的 {name}，未上传。',
 };
 
