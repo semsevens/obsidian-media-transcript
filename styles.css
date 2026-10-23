@@ -2593,3 +2593,55 @@ body.mo-fab-lifted .view-actions.mod-raised .view-action {
   background: none;
   box-shadow: none;
 }
+
+/* ── Phone: the picture edge to edge, the controls in one row (search, ↑ ↓, ⋯) ── */
+
+.mt-phone .mt-toolbar {
+  display: none;
+}
+
+.mt-phone .mt-player-side {
+  background: #000;
+  border-bottom: none;
+}
+
+.mt-phone .mt-player-wrapper {
+  padding: 0;
+  gap: 0;
+  position: static;
+}
+
+.mt-phone video.mt-media {
+  border-radius: 0;
+  max-height: 34vh;
+}
+
+.mt-phone .mt-searchbar {
+  padding: 6px 10px;
+  gap: 4px;
+}
+
+.mt-phone .mt-search-input {
+  font-size: 15px;
+  height: 34px;
+  padding: 0 10px;
+}
+
+.mt-phone .mt-btn-hit,
+.mt-phone .mt-btn-more {
+  min-width: 34px;
+  height: 34px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mt-phone .mt-audio-bar {
+  padding: 6px 10px;
+  gap: 8px;
+}
+
+.is-mobile .workspace-leaf-content .view-content.mt-phone {
+  padding: 0 0 32px;
+}

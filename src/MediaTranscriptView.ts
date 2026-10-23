@@ -1,4 +1,4 @@
-import { FileView, WorkspaceLeaf, TFile, Notice, Menu, Platform } from 'obsidian';
+import { FileView, WorkspaceLeaf, TFile, Notice, Menu, Platform, setIcon } from 'obsidian';
 import type MediaTranscriptPlugin from './main';
 import {
   findSubtitleTracks,
@@ -90,7 +90,36 @@ export class MediaTranscriptView extends FileView {
       const el = this.plugin.nowPlaying.elementFor(this.media, this.file);
       if (el !== (this.followed?.el ?? null)) void this.rebuildPlayer();
     }));
+    // A video followed while out of sight: in sight now, it is shown.
+    this.registerEvent(this.app.workspace.on('active-leaf-change', () => {
+      if (this.followed && this.showsVideo() && this.contentEl.isShown()) void this.rebuildPlayer();
+    }));
     this.register(() => this.unfollow());
+  }
+
+  private showsVideo(): boolean {
+    return this.isVideo && !this.plugin.settings.videoAudioOnly;
+  }
+
+  /**
+   * A video the library's player plays (its sound only): this view takes it
+   * over, to be seen, from where it is and playing if it was.
+   */
+  private takeOver(el: HTMLAudioElement) {
+    const np = this.plugin.nowPlaying;
+    const starting = el.readyState === 0;
+    const go = () => {
+      if (np.elementFor(this.media, this.file) !== el) return;
+      const time = el.currentTime;
+      const play = starting || !el.paused;
+      const rate = el.playbackRate;
+      np.stop();
+      if (this.mediaEl) this.mediaEl.playbackRate = rate;
+      this.seekTo(time, play);
+    };
+    // Just started: where it was left last time is set once it has loaded.
+    if (starting) el.addEventListener('loadedmetadata', () => window.setTimeout(go, 0), { once: true });
+    else go();
   }
 
   /** Stop reading along with the library's player, leaving it playing. */
@@ -182,6 +211,8 @@ export class MediaTranscriptView extends FileView {
   async onLoadFile(file: TFile) {
     this.contentEl.empty();
     this.contentEl.addClass('mt-view');
+    // A phone's screen goes to the picture and the transcript; the controls fold into one row.
+    this.contentEl.toggleClass('mt-phone', Platform.isMobile);
     this.contentEl.removeClass('mt-audio-mode');
     this.contentEl.removeClass('mt-reading-mode');
     this.preferredTrackPath = null;
@@ -255,7 +286,7 @@ export class MediaTranscriptView extends FileView {
    */
   private async buildLayout() {
     const media = this.media;
-    const showVideo = this.isVideo && !this.plugin.settings.videoAudioOnly;
+    const showVideo = this.showsVideo();
     const reused = this.transcriptSideEl;
     if (reused) reused.detach();
 
@@ -266,8 +297,10 @@ export class MediaTranscriptView extends FileView {
     this.mediaEl = null;
 
     const playing = this.plugin.nowPlaying.elementFor(media, this.file);
+    // A video in sight is shown, not only heard; out of sight, followed for now.
+    const takeOver = !!playing && showVideo && this.contentEl.isShown();
     let transcriptSide: HTMLElement;
-    if (media && playing) {
+    if (media && playing && !takeOver) {
       this.follow(this.contentEl.createDiv('mt-audio-bar mt-follow'), playing);
       transcriptSide = reused ?? this.contentEl.createDiv('mt-transcript-side');
       if (reused) this.contentEl.appendChild(reused);
@@ -285,6 +318,7 @@ export class MediaTranscriptView extends FileView {
       transcriptSide = reused ?? root.createDiv('mt-transcript-side');
       if (reused) root.appendChild(reused);
       this.buildVideoPlayer(playerSide, media);
+      if (takeOver && playing) this.takeOver(playing);
     } else {
       this.contentEl.addClass('mt-audio-mode');
       const bar = this.contentEl.createDiv('mt-audio-bar');
@@ -323,7 +357,7 @@ export class MediaTranscriptView extends FileView {
     // The library's player is not ours to stop; where it was, this view's own takes up (paused).
     const wasFollowing = this.followed;
     const state = wasFollowing
-      ? { time: wasFollowing.time, rate: 1, playing: false }
+      ? { time: wasFollowing.time, rate: wasFollowing.el.playbackRate, playing: false }
       : old ? { time: old.currentTime, rate: old.playbackRate, playing: !old.paused } : null;
     const scrollTop = this.transcriptEl?.scrollTop ?? 0;
 
@@ -502,6 +536,7 @@ export class MediaTranscriptView extends FileView {
   }
 
   private buildSpeedControl(container: HTMLElement) {
+    if (Platform.isMobile) return;  // in the ⋯ menu
     const row = container.createDiv('mt-speed-row');
     row.createSpan('mt-speed-label').setText(t('core.speed'));
     const sel = row.createEl('select', { cls: 'mt-speed' });
@@ -648,6 +683,36 @@ export class MediaTranscriptView extends FileView {
     exportBtn.addEventListener('click', () => { void this.exportAsMarkdown(); });
   }
 
+  /** On a phone, what the toolbar holds elsewhere: the subtitle, speed, audio only, text size, export. */
+  private showMoreMenu(e: MouseEvent) {
+    const menu = new Menu();
+    const select = this.trackSelect;
+    if (select && this.subtitleTracks.length > 1) {
+      for (const opt of Array.from(select.options)) {
+        menu.addItem(i => i.setTitle(opt.text).setChecked(opt.value === select.value).onClick(() => {
+          select.value = opt.value;
+          select.dispatchEvent(new Event('change'));
+        }));
+      }
+      menu.addSeparator();
+    }
+    const el = this.mediaEl;
+    if (el) {
+      for (const r of [0.75, 1, 1.25, 1.5, 2]) {
+        menu.addItem(i => i.setTitle(t('core.speedAt', { rate: r })).setChecked(el.playbackRate === r).onClick(() => { el.playbackRate = r; }));
+      }
+      menu.addSeparator();
+    }
+    if (this.isVideo) {
+      menu.addItem(i => i.setTitle(this.plugin.settings.videoAudioOnly ? t('core.modeVideo') : t('core.modeAudioOnly'))
+        .onClick(() => { void this.toggleAudioOnly(); }));
+    }
+    menu.addItem(i => i.setTitle(`A−  ${t('core.fontSmaller')}`).onClick(() => this.nudgeFontSize(-1)));
+    menu.addItem(i => i.setTitle(`A+  ${t('core.fontLarger')}`).onClick(() => this.nudgeFontSize(+1)));
+    menu.addItem(i => i.setTitle(t('core.exportMd')).setIcon('download').onClick(() => { void this.exportAsMarkdown(); }));
+    menu.showAtMouseEvent(e);
+  }
+
   /** Step the transcript font size by `delta` px, clamped, then persist + apply. */
   private nudgeFontSize(delta: number) {
     const next = Math.max(
@@ -682,6 +747,11 @@ export class MediaTranscriptView extends FileView {
       cls: 'mt-btn mt-btn-hit',
       attr: { title: t('core.nextMatch') },
     });
+    if (Platform.isMobile) {
+      const more = bar.createEl('button', { cls: 'mt-btn mt-btn-more clickable-icon', attr: { 'aria-label': t('core.moreActions') } });
+      setIcon(more, 'more-horizontal');
+      more.addEventListener('click', e => this.showMoreMenu(e));
+    }
     prev.addEventListener('click', () => this.stepHit(-1));
     next.addEventListener('click', () => this.stepHit(+1));
 
