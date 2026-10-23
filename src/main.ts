@@ -317,6 +317,19 @@ export default class MediaTranscriptPlugin extends Plugin {
       await this.app.fileManager.renameFile(tr, target);
       renamed++;
     }
+    // Beside them, what is named after the media but doesn't say so inside (a .txt transcript): renamed along.
+    const media = new Set([...this.settings.supportedAudioExtensions, ...this.settings.supportedVideoExtensions]);
+    const folders = new Set([...tracks].map(tr => tr.parent));
+    for (const folder of folders) {
+      for (const f of [...(folder?.children ?? [])]) {
+        if (!(f instanceof TFile) || !f.name.startsWith(oldBase + '.') || media.has(f.extension.toLowerCase())) continue;
+        if (f.name.endsWith('.anno.json')) continue;  // the annotations' own, moved with what they mark
+        const target = normalizePath(`${folder?.path ?? ''}/${newBase}${f.name.slice(oldBase.length)}`);
+        if (this.app.vault.getAbstractFileByPath(target)) continue;
+        await this.app.fileManager.renameFile(f, target);
+        renamed++;
+      }
+    }
     if (renamed > 0) {
       new Notice(t(renamed > 1 ? 'core.renamedTranscriptsMany' : 'core.renamedTranscriptsOne', { n: renamed, name: newName }));
     }
