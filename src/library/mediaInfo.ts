@@ -12,8 +12,13 @@ export function recordedAt(name: string): Date | null {
   const compact = name.match(/(?:^|\D)(20\d{2})(\d{2})(\d{2})[ _-]?(\d{2})(\d{2})(\d{2})(?:\D|$)/);
   const spaced = name.match(/(20\d{2})-(\d{2})-(\d{2})[ T_](\d{2})[.:](\d{2})[.:](\d{2})/);
   const dateOnly = name.match(/(?:^|\D)(20\d{2})-(\d{1,2})-(\d{1,2})(?:\D|$)/);
+  // Named by the day it was, as far as it is known ("2025-07 王斌 - …", "2025 王斌 - …"): its first day.
+  const partial = name.match(/^((?:19|20)\d{2})(?:-(\d{2}))? (?!年)/);
   const m = compact ?? spaced;
-  const parts = m ? m.slice(1, 7).map(Number) : dateOnly ? [...dateOnly.slice(1, 4).map(Number), 0, 0, 0] : null;
+  const parts = m ? m.slice(1, 7).map(Number)
+    : dateOnly ? [...dateOnly.slice(1, 4).map(Number), 0, 0, 0]
+    : partial ? [Number(partial[1]), Number(partial[2] ?? 1), 1, 0, 0, 0]
+    : null;
   if (!parts) return null;
   const [y, mo, d, h, mi, s] = parts;
   if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || s > 59) return null;
@@ -97,6 +102,7 @@ export function isDatedName(name: string): boolean {
  */
 export function withoutDate(base: string): string {
   const out = base
+    .replace(/^(?:19|20)\d{2}(?:-\d{2})? (?!年)/, ' ')
     .replace(/(?<!\d)20\d{2}-\d{1,2}-\d{1,2}(?:[ T_]*(?:[AP]M)?\s*\d{1,2}(?:[ .:]\d{2}){1,2})?/gi, ' ')
     .replace(/(?<!\d)20\d{12}(?=\D|$)/g, ' ')
     .replace(/[\s_\-·]+$/g, '')

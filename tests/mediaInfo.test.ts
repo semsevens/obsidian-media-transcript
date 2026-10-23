@@ -8,6 +8,10 @@ describe('recordedAt', () => {
     expect(recordedAt('Pasted Image 20261009164946_322.png')).toEqual(new Date(2026, 9, 9, 16, 49, 46));
     expect(recordedAt('2026-09-07 会议.m4a')).toEqual(new Date(2026, 8, 7));
     expect(recordedAt('高买低卖也赚钱！2016-1-10 PM4 24.m4a')).toEqual(new Date(2016, 0, 10));
+    // Only the month, or the year, known: its first day.
+    expect(recordedAt('2025-07 王斌 - 早盘：攀升.m4a')).toEqual(new Date(2025, 6, 1));
+    expect(recordedAt('2023 王斌 - 录音.m4a')).toEqual(new Date(2023, 0, 1));
+    expect(recordedAt('2025 年终总结.m4a')).toBeNull();
   });
 
   it('is null when the name says nothing, or something impossible', () => {

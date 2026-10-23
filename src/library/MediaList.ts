@@ -217,7 +217,7 @@ export class MediaList {
         size: e.size,
         backedUp: !!e.backup && Object.keys(e.backup).length > 0,
         // Its own media was uploaded as it was made; a collection was brought in all at once.
-        recorded: recordedAt(name) ?? (folder === this.own && e.added ? new Date(e.added) : null),
+        recorded: recordedOf(name, e.original?.path) ?? (folder === this.own && e.added ? new Date(e.added) : null),
         title: notes[0] && !isDatedName(notes[0].basename) ? notes[0].basename : isGenericName(name) ? base : withoutDate(base),
         notes,
         transcript,
@@ -599,4 +599,16 @@ export class MediaList {
       restore.addEventListener('click', () => { void this.host.restore(item); });
     }
   }
+}
+
+/**
+ * When it was recorded: its name says the day; the name it came with may say
+ * the time too ("Recording 20260319105555" renamed "2026-03-19 录音 - …"),
+ * which keeps the day's recordings in their order.
+ */
+export function recordedOf(name: string, original?: string): Date | null {
+  const day = recordedAt(name);
+  const first = original ? recordedAt(original.slice(original.lastIndexOf('/') + 1)) : null;
+  if (!day) return first;
+  return first && first.toDateString() === day.toDateString() ? first : day;
 }

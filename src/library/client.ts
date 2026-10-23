@@ -19,6 +19,8 @@ export interface IndexEntry {
   size: number;
   added?: string;
   backup?: Record<string, string>;
+  /** As it first came, before any rename. */
+  original?: { path: string };
 }
 
 export interface Job {
