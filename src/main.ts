@@ -23,6 +23,7 @@ import { MiniPlayer } from './library/PlayerBar';
 import { MediaCache } from './library/mediaCache';
 import { Playlist } from './library/playlist';
 import { t } from './i18n';
+import { renderControls } from './ui/controls';
 
 // Subtitle extensions we globally register for click-to-open. Clicking any of
 // these opens the transcript view, which reverse-resolves the matching media
@@ -450,6 +451,16 @@ export default class MediaTranscriptPlugin extends Plugin {
       }
       void this.openTranscript(file, at, playing);
     });
+    // An audio file's player: the same controls as the cards' (a video keeps the browser's, over its picture).
+    const ours = (tries: number) => {
+      const audio = containerEl.querySelector(':scope > audio');
+      if (audio instanceof HTMLAudioElement) {
+        audio.removeAttribute('controls');
+        containerEl.addClass('mt-embed-ours');
+        renderControls(containerEl.createDiv('mt-embed-controls'), audio, { compact: true });
+      } else if (tries > 0) window.setTimeout(() => ours(tries - 1), 100);
+    };
+    ours(10);
   }
 
   /**

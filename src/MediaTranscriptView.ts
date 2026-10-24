@@ -12,7 +12,9 @@ import type { ResolvedMedia } from './mediaLocator';
 import { parseSubtitle, SubtitleSegment, formatTime } from './utils/subtitleParser';
 import { parseTimeFragment, timeFragment } from './utils/timeFragment';
 import { t } from './i18n';
-import { renderBar } from './library/PlayerBar';
+import { renderBar, renderCover } from './library/PlayerBar';
+import { iconButton, renderControls } from './ui/controls';
+import { whereFrom } from './ui/whereFrom';
 
 // Transcript text size bounds (px). Defined here rather than in settings.ts to
 // keep the import direction one-way: settings.ts → this file.
@@ -39,7 +41,11 @@ export class MediaTranscriptView extends FileView {
   private segments: SubtitleSegment[] = [];
   private activeIndex = -1;
   private subtitleTracks: FoundSubtitleFile[] = [];
-  private trackSelect: HTMLSelectElement | null = null;
+  // The track shown, and the chip in the toolbar that names it (a menu of the others).
+  private track: FoundSubtitleFile | null = null;
+  private trackChip: HTMLElement | null = null;
+  private controls: { destroy: () => void } | null = null;
+  private searchBarEl: HTMLElement | null = null;
   // The media being played: `this.file` itself, or — when a subtitle was
   // opened — whatever MediaLocator found for it, possibly outside the vault.
   // Null means reading-only: the transcript without a player.
@@ -61,7 +67,6 @@ export class MediaTranscriptView extends FileView {
   // The transcript column, kept across player rebuilds so switching between
   // video and audio-only doesn't re-parse or re-render the subtitle.
   private transcriptSideEl: HTMLElement | null = null;
-  private audioOnlyBtn: HTMLElement | null = null;
 
   // ── Search state ──────────────────────────────────────────────────────────
   private txtEls: HTMLElement[] = [];        // the .mt-txt of each segment
@@ -291,6 +296,8 @@ export class MediaTranscriptView extends FileView {
     if (reused) reused.detach();
 
     this.unfollow();
+    this.controls?.destroy();
+    this.controls = null;
     this.contentEl.empty();
     this.contentEl.removeClass('mt-audio-mode');
     this.contentEl.removeClass('mt-reading-mode');
@@ -331,8 +338,6 @@ export class MediaTranscriptView extends FileView {
       this.transcriptSideEl = transcriptSide;
       await this.buildTranscriptPanel(transcriptSide);
     }
-    this.updateAudioOnlyBtn();
-
     if (this.pendingSeek) this.seekTo(this.pendingSeek.time, this.pendingSeek.play);
   }
 
@@ -380,17 +385,6 @@ export class MediaTranscriptView extends FileView {
     if (this.transcriptEl) this.transcriptEl.scrollTop = scrollTop;
   }
 
-  private updateAudioOnlyBtn() {
-    const btn = this.audioOnlyBtn;
-    if (!btn) return;
-    const audioOnly = this.plugin.settings.videoAudioOnly;
-    btn.setText(audioOnly ? t('core.modeVideo') : t('core.modeAudioOnly'));
-    btn.setAttribute(
-      'title',
-      audioOnly ? t('core.modeVideoTitle') : t('core.modeAudioOnlyTitle'),
-    );
-  }
-
   /** Apply a new player-pane width (%) to this open view, if it's in video mode. */
   applyPlayerWidth(pct: number) {
     const playerSide = this.contentEl.querySelector('.mt-player-side');
@@ -406,8 +400,7 @@ export class MediaTranscriptView extends FileView {
 
   /** Put the cursor in the transcript search box (see the command in main.ts). */
   focusSearch() {
-    this.searchInput?.focus();
-    this.searchInput?.select();
+    this.toggleSearch(true);
   }
 
   /** Look for the media again and rebuild (after linking it by hand, say). */
@@ -432,12 +425,16 @@ export class MediaTranscriptView extends FileView {
   private buildVideoPlayer(container: HTMLElement, media: ResolvedMedia) {
     const resourcePath = media.src;
     const wrapper = container.createDiv('mt-player-wrapper');
-    this.mediaEl = wrapper.createEl('video', {
+    const video = wrapper.createEl('video', {
       cls: 'mt-media',
-      attr: { src: resourcePath, controls: '' },
+      attr: { src: resourcePath, playsinline: '' },
     });
-    this.buildSpeedControl(wrapper);
-    this.buildOrigin(container, media);
+    this.mediaEl = video;
+    video.addEventListener('click', () => { if (video.paused) void video.play().catch(() => {}); else video.pause(); });
+    this.controls = renderControls(wrapper.createDiv('mt-video-controls'), video, { video });
+    const head = container.createDiv('mt-video-head');
+    this.buildHead(head, media.title ?? media.basename, whereFrom(media));
+    this.buildOrigin(head, media);
     this.mediaEl.addEventListener('timeupdate', () => this.syncHighlight());
     this.reportLoadErrors(this.mediaEl, media);
   }
@@ -481,14 +478,13 @@ export class MediaTranscriptView extends FileView {
     // recording, a fraction of the bytes to fetch before it starts.
     const media = this.isVideo ? (video.audioTwin ?? video) : video;
     const resourcePath = media.src;
-    container.createSpan('mt-audio-bar-icon').setText(this.isVideo ? '🎧' : '🎵');
-    container.createSpan('mt-audio-bar-title').setText(video.title ?? media.basename);
+    this.buildHead(container, video.title ?? media.basename, whereFrom(video));
     const audio = container.createEl('audio', {
       cls: 'mt-media-audio',
-      attr: { src: resourcePath, controls: '' },
+      attr: { src: resourcePath, preload: 'metadata' },
     });
     this.mediaEl = audio;
-    this.buildSpeedControl(container);
+    this.controls = renderControls(container, audio);
     audio.addEventListener('timeupdate', () => this.syncHighlight());
     this.reportLoadErrors(audio, media);
 
@@ -510,9 +506,11 @@ export class MediaTranscriptView extends FileView {
   // Reading-only header: say plainly there's nothing to play, and where we
   // looked, so a missing drive or a settings typo explains itself.
   private buildNoMediaBar(container: HTMLElement) {
-    container.createSpan('mt-audio-bar-icon').setText('📄');
-    container.createSpan('mt-audio-bar-title').setText(this.file?.basename ?? '');
-    const note = container.createSpan('mt-nomedia-note');
+    const head = container.createDiv('mt-head');
+    setIcon(head.createDiv('mt-head-doc'), 'file-text');
+    const names = head.createDiv('mt-head-names');
+    names.createDiv({ cls: 'mt-head-title', text: this.file ? subtitleBaseName(this.file.name) : '' });
+    const note = names.createDiv('mt-head-sub mt-nomedia-note');
     note.setText(t('core.noMediaReadingOnly'));
     note.setAttribute(
       'title',
@@ -520,33 +518,29 @@ export class MediaTranscriptView extends FileView {
     );
     const file = this.file;
     if (!file) return;
-    const link = container.createEl('button', {
-      cls: 'mt-btn mt-link-media-btn',
+    const row = container.createDiv('mt-nomedia-actions');
+    const link = row.createEl('button', {
+      cls: 'mod-cta mt-link-media-btn',
       text: t('core.linkMediaButton'),
       attr: { 'aria-label': t('core.linkMediaAria') },
     });
     link.addEventListener('click', () => { void this.plugin.linkMedia(file); });
     // A server that didn't answer (asleep, a phone's VPN still coming back)
     // may well answer now.
-    const retry = container.createEl('button', { cls: 'mt-btn', text: t('core.retryFindMedia') });
+    const retry = row.createEl('button', { text: t('core.retryFindMedia') });
     retry.addEventListener('click', () => {
       this.plugin.mediaLocator.invalidate();
       void this.reload();
     });
   }
 
-  private buildSpeedControl(container: HTMLElement) {
-    if (Platform.isMobile) return;  // in the ⋯ menu
-    const row = container.createDiv('mt-speed-row');
-    row.createSpan('mt-speed-label').setText(t('core.speed'));
-    const sel = row.createEl('select', { cls: 'mt-speed' });
-    for (const r of [0.75, 1, 1.25, 1.5, 2]) {
-      const opt = sel.createEl('option', { text: `${r}x`, attr: { value: String(r) } });
-      if (r === 1) opt.selected = true;
-    }
-    sel.addEventListener('change', () => {
-      if (this.mediaEl) this.mediaEl.playbackRate = parseFloat(sel.value);
-    });
+  /** What plays: a cover (the colour of where it is from), its name, and where it is from. */
+  private buildHead(container: HTMLElement, title: string, from: string) {
+    const head = container.createDiv('mt-head');
+    renderCover(head, from, 'is-small mt-head-cover');
+    const names = head.createDiv('mt-head-names');
+    names.createDiv({ cls: 'mt-head-title', text: title });
+    names.createDiv({ cls: 'mt-head-sub', text: from });
   }
 
   // Draggable divider between the video player and the transcript.
@@ -591,7 +585,8 @@ export class MediaTranscriptView extends FileView {
     this.buildToolbar(toolbar);
 
     // Search row
-    this.buildSearchBar(container.createDiv('mt-searchbar'));
+    this.searchBarEl = container.createDiv('mt-searchbar');
+    this.buildSearchBar(this.searchBarEl);
 
     // Scrollable transcript
     this.transcriptEl = container.createDiv('mt-transcript');
@@ -619,7 +614,6 @@ export class MediaTranscriptView extends FileView {
     if (this.preferredTrackPath && this.file?.path === this.preferredTrackPath) add(this.file);
     this.subtitleTracks = tracks;
     const sorted = resolvePriority(this.subtitleTracks, this.plugin.settings.priorities);
-    this.populateTrackSelect(sorted);
 
     // If we arrived here from a clicked subtitle, load that exact track;
     // otherwise fall back to the priority-sorted default.
@@ -629,88 +623,90 @@ export class MediaTranscriptView extends FileView {
     const initial = preferred ?? sorted[0];
 
     if (initial) {
-      if (this.trackSelect) this.trackSelect.value = initial.file.path;
       await this.loadTrack(initial);
     } else {
+      this.track = null;
+      this.paintTrackChip();
       this.showEmpty();
     }
   }
 
   private buildToolbar(toolbar: HTMLElement) {
-    // Subtitle source selector
-    const selectWrap = toolbar.createDiv('mt-select-wrap');
-    selectWrap.createEl('label', { text: t('core.subtitleLabel'), cls: 'mt-label' });
-    this.trackSelect = selectWrap.createEl('select', { cls: 'mt-select' });
-    this.trackSelect.addEventListener('change', () => {
-      const track = this.subtitleTracks.find(
-        t => t.file.path === this.trackSelect?.value,
-      );
-      if (track) void this.loadTrack(track);
+    // Which transcript: a chip naming it; with others, a menu of them.
+    this.trackChip = toolbar.createEl('button', { cls: 'mt-track-chip', attr: { 'aria-label': t('core.subtitleLabel') } });
+    this.trackChip.addEventListener('click', e => this.showTrackMenu(e));
+    toolbar.createDiv('mt-toolbar-gap');
+    iconButton(toolbar, 'search', t('core.cmdSearchTranscript'), 'mt-tool-search', () => this.toggleSearch());
+    iconButton(toolbar, 'a-large-small', t('core.textSize'), 'mt-tool-size', e => {
+      const menu = new Menu();
+      menu.addItem(i => i.setTitle(t('core.fontLarger')).setIcon('plus').onClick(() => this.nudgeFontSize(+1)));
+      menu.addItem(i => i.setTitle(t('core.fontSmaller')).setIcon('minus').onClick(() => this.nudgeFontSize(-1)));
+      menu.addItem(i => i.setTitle(t('core.textSizeNow', { px: this.plugin.settings.transcriptFontSize })).setDisabled(true));
+      menu.showAtMouseEvent(e);
     });
-
-    const actions = toolbar.createDiv('mt-actions');
-
-    // Video ⇄ audio-only. Only meaningful for video files; audio has no picture.
-    if (this.isVideo) {
-      this.audioOnlyBtn = actions.createEl('button', { cls: 'mt-btn mt-btn-mode' });
-      this.audioOnlyBtn.addEventListener('click', () => { void this.toggleAudioOnly(); });
-      this.updateAudioOnlyBtn();
-    } else {
-      this.audioOnlyBtn = null;
-    }
-
-    // Font size: A− / A+ (persisted, applied to every open transcript view)
-    const smaller = actions.createEl('button', {
-      text: 'A−',
-      cls: 'mt-btn mt-btn-font',
-      attr: { title: t('core.fontSmaller') },
+    iconButton(toolbar, 'more-horizontal', t('core.moreActions'), 'mt-tool-more', e => {
+      const menu = new Menu();
+      this.fillMoreMenu(menu);
+      menu.showAtMouseEvent(e);
     });
-    smaller.addEventListener('click', () => this.nudgeFontSize(-1));
-
-    const bigger = actions.createEl('button', {
-      text: 'A+',
-      cls: 'mt-btn mt-btn-font',
-      attr: { title: t('core.fontLarger') },
-    });
-    bigger.addEventListener('click', () => this.nudgeFontSize(+1));
-
-    // Export as markdown button
-    const exportBtn = actions.createEl('button', {
-      text: t('core.exportMd'),
-      cls: 'mt-btn',
-      attr: { title: t('core.exportMdTitle') },
-    });
-    exportBtn.addEventListener('click', () => { void this.exportAsMarkdown(); });
   }
 
-  /** On a phone, what the toolbar holds elsewhere: the subtitle, speed, audio only, text size, export. */
-  private showMoreMenu(e: MouseEvent) {
+  private showTrackMenu(e: MouseEvent) {
+    if (this.subtitleTracks.length < 2) return;
     const menu = new Menu();
-    const select = this.trackSelect;
-    if (select && this.subtitleTracks.length > 1) {
-      for (const opt of Array.from(select.options)) {
-        menu.addItem(i => i.setTitle(opt.text).setChecked(opt.value === select.value).onClick(() => {
-          select.value = opt.value;
-          select.dispatchEvent(new Event('change'));
-        }));
-      }
-      menu.addSeparator();
+    for (const track of resolvePriority(this.subtitleTracks, this.plugin.settings.priorities)) {
+      menu.addItem(i => i.setTitle(trackLabel(track)).setChecked(track.file === this.track?.file)
+        .onClick(() => { void this.loadTrack(track); }));
+    }
+    menu.showAtMouseEvent(e);
+  }
+
+  private paintTrackChip() {
+    const chip = this.trackChip;
+    if (!chip) return;
+    chip.empty();
+    setIcon(chip.createSpan('mt-track-chip-icon'), 'captions');
+    chip.createSpan({ cls: 'mt-track-chip-label', text: this.track ? trackLabel(this.track) : t('core.noSubtitlesOption') });
+    if (this.subtitleTracks.length > 1) setIcon(chip.createSpan('mt-track-chip-more'), 'chevron-down');
+    chip.toggleClass('is-single', this.subtitleTracks.length < 2);
+  }
+
+  /** The rest: audio only, a link to this moment, following what is said, export. */
+  private fillMoreMenu(menu: Menu) {
+    if (this.isVideo) {
+      const audioOnly = this.plugin.settings.videoAudioOnly;
+      menu.addItem(i => i.setTitle(audioOnly ? t('core.showVideo') : t('core.listenOnly')).setIcon(audioOnly ? 'film' : 'headphones')
+        .onClick(() => { void this.toggleAudioOnly(); }));
     }
     const el = this.mediaEl;
     if (el) {
-      for (const r of [0.75, 1, 1.25, 1.5, 2]) {
-        menu.addItem(i => i.setTitle(t('core.speedAt', { rate: r })).setChecked(el.playbackRate === r).onClick(() => { el.playbackRate = r; }));
-      }
-      menu.addSeparator();
+      menu.addItem(i => i.setTitle(t('core.copyLinkHere')).setIcon('link').onClick(() => {
+        void navigator.clipboard.writeText(this.timestampLink(el.currentTime));
+        new Notice(t('core.copied'));
+      }));
     }
-    if (this.isVideo) {
-      menu.addItem(i => i.setTitle(this.plugin.settings.videoAudioOnly ? t('core.modeVideo') : t('core.modeAudioOnly'))
-        .onClick(() => { void this.toggleAudioOnly(); }));
-    }
-    menu.addItem(i => i.setTitle(`A−  ${t('core.fontSmaller')}`).onClick(() => this.nudgeFontSize(-1)));
-    menu.addItem(i => i.setTitle(`A+  ${t('core.fontLarger')}`).onClick(() => this.nudgeFontSize(+1)));
+    menu.addItem(i => i.setTitle(t('core.autoScroll')).setIcon('arrow-down-to-line').setChecked(this.plugin.settings.autoScroll)
+      .onClick(() => {
+        this.plugin.settings.autoScroll = !this.plugin.settings.autoScroll;
+        void this.plugin.saveSettings();
+        if (this.plugin.settings.autoScroll) this.scrollActiveIntoCenter(true);
+      }));
+    menu.addSeparator();
     menu.addItem(i => i.setTitle(t('core.exportMd')).setIcon('download').onClick(() => { void this.exportAsMarkdown(); }));
-    menu.showAtMouseEvent(e);
+  }
+
+  private toggleSearch(open = !this.searchBarEl?.hasClass('is-open')) {
+    const bar = this.searchBarEl;
+    if (!bar) return;
+    bar.toggleClass('is-open', open);
+    this.contentEl.querySelector('.mt-tool-search')?.toggleClass('is-active', open);
+    if (open) {
+      this.searchInput?.focus();
+      this.searchInput?.select();
+    } else if (this.searchInput) {
+      this.searchInput.value = '';
+      this.applySearch('');
+    }
   }
 
   /** Step the transcript font size by `delta` px, clamped, then persist + apply. */
@@ -737,21 +733,9 @@ export class MediaTranscriptView extends FileView {
     this.searchInput = input;
     this.searchCountEl = bar.createSpan('mt-search-count');
 
-    const prev = bar.createEl('button', {
-      text: '↑',
-      cls: 'mt-btn mt-btn-hit',
-      attr: { title: t('core.prevMatch') },
-    });
-    const next = bar.createEl('button', {
-      text: '↓',
-      cls: 'mt-btn mt-btn-hit',
-      attr: { title: t('core.nextMatch') },
-    });
-    if (Platform.isMobile) {
-      const more = bar.createEl('button', { cls: 'mt-btn mt-btn-more clickable-icon', attr: { 'aria-label': t('core.moreActions') } });
-      setIcon(more, 'more-horizontal');
-      more.addEventListener('click', e => this.showMoreMenu(e));
-    }
+    const prev = iconButton(bar, 'chevron-up', t('core.prevMatch'), 'mt-btn-hit');
+    const next = iconButton(bar, 'chevron-down', t('core.nextMatch'), 'mt-btn-hit');
+    iconButton(bar, 'x', t('core.closeSearch'), 'mt-search-close', () => this.toggleSearch(false));
     prev.addEventListener('click', () => this.stepHit(-1));
     next.addEventListener('click', () => this.stepHit(+1));
 
@@ -762,8 +746,7 @@ export class MediaTranscriptView extends FileView {
         this.stepHit(e.shiftKey ? -1 : +1);
       } else if (e.key === 'Escape') {
         e.preventDefault();
-        input.value = '';
-        this.applySearch('');
+        this.toggleSearch(false);
       }
     });
 
@@ -868,31 +851,12 @@ export class MediaTranscriptView extends FileView {
     el.toggleClass('mt-search-none', q.length > 0 && this.hitEls.length === 0);
   }
 
-  private populateTrackSelect(tracks: FoundSubtitleFile[]) {
-    if (!this.trackSelect) return;
-    this.trackSelect.empty();
-
-    if (tracks.length === 0) {
-      const opt = this.trackSelect.createEl('option', { text: t('core.noSubtitlesOption') });
-      opt.disabled = true;
-      return;
-    }
-
-    for (const track of tracks) {
-      const label = track.marker
-        ? `${track.marker}.${track.extension}`
-        : track.extension.toUpperCase();
-      this.trackSelect.createEl('option', {
-        text: label,
-        attr: { value: track.file.path },
-      });
-    }
-  }
-
   // ─── Track loading ────────────────────────────────────────────────────────
 
   private async loadTrack(track: FoundSubtitleFile) {
     if (!this.transcriptEl) return;
+    this.track = track;
+    this.paintTrackChip();
     this.transcriptEl.empty();
     this.segmentEls = [];
     this.txtEls = [];
@@ -1037,7 +1001,7 @@ export class MediaTranscriptView extends FileView {
     // on screen would otherwise have no way to learn what it is looking at.
     if (this.transcriptEl) {
       this.transcriptEl.dataset.mtMedia = this.media?.location ?? '';
-      this.transcriptEl.dataset.mtTrack = this.trackSelect?.value ?? '';
+      this.transcriptEl.dataset.mtTrack = this.track?.file.path ?? '';
     }
 
     this.contentEl.dispatchEvent(
@@ -1045,7 +1009,7 @@ export class MediaTranscriptView extends FileView {
         bubbles: true,
         detail: {
           mediaPath: this.media?.location ?? null,
-          trackPath: this.trackSelect?.value ?? null,
+          trackPath: this.track?.file.path ?? null,
         },
       }),
     );
@@ -1138,9 +1102,7 @@ export class MediaTranscriptView extends FileView {
     const mdContent = lines.join('\n');
 
     // Determine the marker from the currently selected track
-    const selectedPath = this.trackSelect?.value ?? '';
-    const selectedTrack = this.subtitleTracks.find(t => t.file.path === selectedPath);
-    const marker = selectedTrack?.marker ?? '';
+    const marker = this.track?.marker ?? '';
     const mdName = marker ? `${base}.${marker}.md` : `${base}.md`;
     const mdPath = (this.trackDir ? this.trackDir + '/' : '') + mdName;
 
@@ -1171,4 +1133,9 @@ export class MediaTranscriptView extends FileView {
     this.transcriptEl.empty();
     this.transcriptEl.createDiv('mt-error').setText(msg);
   }
+}
+
+/** A transcript's name in the chip and menu: what made it (`vibevoice-4bit`), or its format. */
+function trackLabel(track: FoundSubtitleFile): string {
+  return track.marker || track.extension.toUpperCase();
 }

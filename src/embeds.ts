@@ -6,6 +6,9 @@ import { parseSubtitle } from './utils/subtitleParser';
 import { parseTimeFragment } from './utils/timeFragment';
 import { subtitleBaseName } from './utils/mediaMatch';
 import { t } from './i18n';
+import { renderCover } from './library/PlayerBar';
+import { renderControls } from './ui/controls';
+import { whereFrom } from './ui/whereFrom';
 
 // Embeds have their own registry (extension → component factory), separate
 // from the view registry. Undocumented; every access is guarded so a change
@@ -177,8 +180,16 @@ export class TranscriptCards {
     card.addEventListener('click', e => e.stopPropagation());
 
     const head = card.createDiv('mt-card-head');
-    setIcon(head.createSpan('mt-card-icon'), 'captions');
-    head.createSpan({ cls: 'mt-card-title', text: subtitleBaseName(transcript.name) });
+    const coverSlot = head.createDiv('mt-card-cover');
+    const names = head.createDiv('mt-card-names');
+    names.createDiv({ cls: 'mt-card-title', text: subtitleBaseName(transcript.name) });
+    const sub = names.createDiv('mt-card-sub');
+    const paintFrom = (from: string) => {
+      coverSlot.empty();
+      renderCover(coverSlot, from, 'is-small');
+      sub.setText(from);
+    };
+    paintFrom(transcript.parent?.path && transcript.parent.path !== '/' ? transcript.parent.path.split('/').pop() ?? '' : '');
     const btn = head.createEl('button', {
       cls: 'mt-embed-btn',
       attr: { 'aria-label': t('core.openTranscriptBeside') },
@@ -223,15 +234,19 @@ export class TranscriptCards {
         return;
       }
       status.remove();
+      paintFrom(whereFrom(media));
       // Listening to videos: their audio twin, when there is one, starts sooner.
       const played = this.plugin.settings.videoAudioOnly ? (media.audioTwin ?? media) : media;
       const isVideo = this.plugin.settings.supportedVideoExtensions.includes(played.extension);
       // `#t=` on the source is the media-fragment start, same as a native embed.
       const src = played.src + (startAt !== null ? `#t=${startAt}` : '');
-      player = body.createEl(isVideo ? 'video' : 'audio', {
+      const el = body.createEl(isVideo ? 'video' : 'audio', {
         cls: isVideo ? 'mt-card-video' : 'mt-card-audio',
-        attr: { src, controls: '', preload: 'metadata' },
+        attr: { src, preload: 'metadata', playsinline: '' },
       });
+      player = el;
+      if (el instanceof HTMLVideoElement) el.addEventListener('click', () => { if (el.paused) void el.play().catch(() => {}); else el.pause(); });
+      renderControls(body, el, { compact: true, video: el instanceof HTMLVideoElement ? el : undefined });
       this.players.add(player);
       this.reloads.set(player, load);
     };

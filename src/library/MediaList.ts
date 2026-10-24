@@ -6,6 +6,7 @@ import type { QueueEntry } from './playlist';
 import { durationIn, formatDuration, isDatedName, isGenericName, isTranscriptNamedFor, openingWords, recordedAt, withoutDate } from './mediaInfo';
 import { formatSize } from '../utils/format';
 import { obsidianLanguage, t } from '../i18n';
+import { renderCover } from './PlayerBar';
 
 const PAGE = 200;
 const LOCALE = obsidianLanguage() === 'zh' ? 'zh-CN' : 'en';
@@ -286,19 +287,19 @@ export class MediaList {
     this.paintQueued(list);
   }
 
-  /** Each row's playlist button: in it (tap to take out) or not (tap to add). */
+  /** Each row in the playlist has a mark saying so. */
   paintQueued(list: HTMLElement): void {
     const { playlist } = this.plugin;
     for (const row of Array.from(list.querySelectorAll<HTMLElement>('.mo-lib-media-row'))) {
-      const button = row.querySelector<HTMLElement>('.mo-lib-queue');
-      if (!button) continue;
+      const flags = row.querySelector<HTMLElement>('.mo-lib-flags');
+      if (!flags) continue;
       const queued = playlist.has(row.dataset.path ?? '');
-      const icon = queued ? 'list-checks' : 'list-plus';
-      if (button.dataset.icon === icon) continue;
-      button.dataset.icon = icon;
-      setIcon(button, icon);
-      button.toggleClass('is-queued', queued);
-      button.setAttr('aria-label', t(queued ? 'library.playlistRemove' : 'library.menuAddToPlaylist'));
+      let mark = flags.querySelector<HTMLElement>('.mo-lib-flag.is-queued');
+      if (queued && !mark) {
+        mark = flags.createSpan({ cls: 'mo-lib-flag is-queued', attr: { 'aria-label': t('library.inPlaylist') } });
+        setIcon(mark, 'list-music');
+        flags.prepend(mark);
+      } else if (!queued && mark) mark.remove();
     }
   }
 
@@ -336,7 +337,9 @@ export class MediaList {
     const size = missing.reduce((n, it) => n + this.fetchable(it).size, 0);
     // Only a group that fits in what this device keeps: a larger one is downloaded a row at a time.
     if (missing.length && !this.offlineOnly && cache.usage().total + size <= cache.limit) {
-      const all = bar.createEl('button', { cls: 'mo-lib-chip', text: t('library.downloadAll', { count: missing.length, size: formatSize(size) }) });
+      const all = bar.createEl('button', { cls: 'mo-lib-chip', attr: { 'aria-label': t('library.downloadAll', { count: missing.length, size: formatSize(size) }) } });
+      setIcon(all.createSpan('mo-lib-chip-icon'), 'download');
+      all.createSpan({ text: t('library.downloadAllShort', { size: formatSize(size) }) });
       all.addEventListener('click', () => this.host.confirm(
         t('library.downloadAllTitle', { count: missing.length }),
         t('library.downloadAllDesc', { size: formatSize(size), limit: formatSize(cache.limit) }),
@@ -400,7 +403,9 @@ export class MediaList {
     const others = [...counts.keys()].filter(c => c !== this.own).sort((a, b) => counts.get(b)!.length - counts.get(a)!.length);
     const add = (key: string | null, label: string, n: number) => {
       const active = key === '*' ? this.collection === '*' : this.collection !== '*' && (key ?? this.own) === current;
-      const b = bar.createEl('button', { text: `${label} ${n}`, cls: active ? 'is-active' : '' });
+      const b = bar.createEl('button', { cls: active ? 'is-active' : '' });
+      b.createSpan({ text: label });
+      b.createSpan({ cls: 'mo-lib-count', text: String(n) });
       b.addEventListener('click', () => {
         this.collection = key;
         this.limit = PAGE;
@@ -415,7 +420,11 @@ export class MediaList {
   private renderRow(list: HTMLElement, it: Item): void {
     const row = list.createDiv('mo-lib-row mo-lib-media-row');
     row.dataset.path = it.path;
-    const playButton = row.createEl('button', { cls: 'mo-lib-play', attr: { 'aria-label': t('library.menuPlay') } });
+    // The cover (the colour of where it is from) is the play button.
+    const art = row.createDiv('mo-lib-art');
+    if (it.collection === this.own) setIcon(art.createDiv('mo-cover is-small mo-lib-own-cover'), VIDEO_EXT.test(it.name) ? 'video' : 'mic');
+    else renderCover(art, it.collection, 'is-small');
+    const playButton = art.createEl('button', { cls: 'mo-lib-play', attr: { 'aria-label': t('library.menuPlay') } });
     setIcon(playButton, 'play');
     playButton.addEventListener('click', evt => {
       evt.stopPropagation();
@@ -425,12 +434,13 @@ export class MediaList {
     const title = main.createDiv({ cls: 'mo-lib-name', text: it.title });
     const meta = main.createDiv('mo-lib-meta');
     const when = it.recorded ? formatWhen(it.recorded) : '';
-    const facts = meta.createSpan();
+    const facts = meta.createSpan('mo-lib-facts');
     const context = main.createDiv({ cls: 'mo-lib-file' });
     const base = it.name.slice(0, it.name.lastIndexOf('.'));
     const generic = isGenericName(it.name) && !it.notes.some(n => n.basename === it.title);
     const show = (d?: { duration: number | null; words: string }) => {
-      facts.setText([when, d?.duration && d.duration >= 1 ? formatDuration(d.duration) : '', formatSize(it.size)].filter(Boolean).join(' · '));
+      facts.setText([d?.duration && d.duration >= 1 ? formatDuration(d.duration) : '', when].filter(Boolean).join(' · '));
+      facts.setAttr('title', [when, formatSize(it.size)].filter(Boolean).join(' · '));
       // A name a recorder gave (a timestamp) says least: then what was said
       // names it best. A name someone chose is kept.
       const name = (generic && d?.words) || it.title;
@@ -447,37 +457,33 @@ export class MediaList {
     show(this.details.get(it.path));
     if (it.transcript && !this.details.has(it.path)) void this.loadDetails(it).then(show);
 
-    // Only what is out of the ordinary: a transcript is the rule.
+    // Only what is out of the ordinary, as small marks after the facts (a transcript is the rule).
+    const flags = meta.createSpan('mo-lib-flags');
+    const flag = (icon: string, label: string, cls: string) => {
+      const f = flags.createSpan({ cls: `mo-lib-flag ${cls}`, attr: { 'aria-label': label } });
+      setIcon(f, icon);
+      return f;
+    };
     const job = this.jobs.get(it.path);
     // A failed job is past once a transcript is there (made again, or by hand).
     if (job && (job.state === 'queued' || job.state === 'claimed' || (job.state === 'failed' && !it.transcript))) {
       const label = job.state === 'queued' ? t('library.jobQueued') : job.state === 'claimed' ? t('library.jobClaimed') : t('library.jobFailed');
-      const badge = meta.createSpan({ cls: `mo-lib-badge mo-lib-job-${job.state}`, text: label });
-      if (job.error) badge.setAttr('title', job.error);
+      const f = flag(job.state === 'queued' ? 'clock' : job.state === 'claimed' ? 'audio-lines' : 'alert-circle', job.error ? `${label}: ${job.error}` : label, `mo-lib-job-${job.state}`);
+      if (job.state !== 'queued') f.createSpan({ cls: 'mo-lib-flag-text', text: label });
     } else if (!it.transcript) {
-      meta.createSpan({ cls: 'mo-lib-badge', text: t('library.badgeNoTranscript') });
+      flag('captions-off', t('library.badgeNoTranscript'), 'is-faint');
     }
-    meta.createSpan({ cls: 'mo-lib-badge mo-lib-cache' });
     // Backups are kept track of for this vault's own media only.
-    if (!it.backedUp && it.vaultPath) meta.createSpan({ cls: 'mo-lib-badge mo-lib-nobackup', text: t('library.badgeNoBackup'), attr: { title: t('library.badgeNoBackupTip') } });
+    if (!it.backedUp && it.vaultPath) flag('cloud-off', `${t('library.badgeNoBackup')}: ${t('library.badgeNoBackupTip')}`, 'mo-lib-nobackup');
     if (it.vaultPath && this.plugin.app.vault.getAbstractFileByPath(it.vaultPath) instanceof TFile) {
-      meta.createSpan({ cls: 'mo-lib-badge', text: t('library.badgeOnDevice') });
+      flag('hard-drive', t('library.badgeOnDevice'), 'is-faint');
     }
+    flags.createSpan({ cls: 'mo-lib-badge mo-lib-cache' });
 
     // The row opens its transcript (which plays it too); the button just plays it here.
     main.addEventListener('click', () => {
       if (it.transcript) void this.plugin.openTranscript(it.transcript);
       else this.play(it);
-    });
-    const queue = row.createEl('button', { cls: 'clickable-icon mo-lib-queue' });
-    queue.addEventListener('click', evt => {
-      evt.stopPropagation();
-      const { playlist } = this.plugin;
-      if (playlist.has(it.path)) playlist.remove(it.path);
-      else {
-        playlist.add(this.entry(it), 'end');
-        new Notice(t('library.playlistAdded', { name: this.entry(it).title }));
-      }
     });
     const more = row.createEl('button', { cls: 'clickable-icon mo-lib-more-actions', attr: { 'aria-label': t('library.moreActions') } });
     setIcon(more, 'more-horizontal');

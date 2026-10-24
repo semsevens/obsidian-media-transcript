@@ -67,7 +67,9 @@ export function renderActivity(parent: HTMLElement, plugin: MediaTranscriptPlugi
       backedUp: path => host.backedUp(path),
       mobile: Platform.isMobile,
       phoneDelay: PHONE_DELAY_S,
-    }).filter(a => !a.finished);  // what is done is in the progress tab
+    })
+      // What is done is in the progress tab; so is what waits only for tonight's backup.
+      .filter(a => !a.finished && a.stages.some(st => st.kind !== 'backup' && st.state !== 'done'));
   };
 
   const paint = () => {

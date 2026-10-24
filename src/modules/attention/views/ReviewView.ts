@@ -1,4 +1,4 @@
-import { App, ItemView, Menu, Notice, WorkspaceLeaf, TFile, MarkdownRenderer } from 'obsidian';
+import { App, ItemView, Menu, Notice, WorkspaceLeaf, TFile, MarkdownRenderer, setIcon } from 'obsidian';
 import type AttentionPlugin from '../main';
 import { IndexEntry, Bucket, BUCKET_ORDER } from '../store/review';
 import { Annotation, isComment, lastMarked, pdfPage } from '../model';
@@ -88,6 +88,8 @@ export class ReviewView extends ItemView {
 
   private renderHeader(root: HTMLElement): void {
     const header = root.createDiv('at-review-header');
+    const top = header.createDiv('at-review-top');
+    top.createDiv({ cls: 'at-review-title', text: t('attention.viewTitle') });
 
     const tabs = header.createDiv('at-tabs');
     const tab = (label: string, lens: Lens) => {
@@ -105,7 +107,9 @@ export class ReviewView extends ItemView {
     tab(t('attention.tabThisNote'), 'file');
     tab(t('attention.tabAll'), 'all');
 
-    const resurface = header.createEl('button', { text: t('attention.buttonResurface'), cls: 'at-btn' });
+    const resurface = top.createEl('button', { cls: 'at-btn at-resurface' });
+    setIcon(resurface.createSpan('at-btn-icon'), 'shuffle');
+    resurface.createSpan({ text: t('attention.buttonResurface') });
     if (this.resurfaced) resurface.addClass('is-active');
     resurface.addEventListener('click', () => {
       this.resurfaced = this.resurfaced
@@ -114,20 +118,24 @@ export class ReviewView extends ItemView {
       void this.render();
     });
 
-    if (!this.resurfaced) this.renderSortControl(root);
+    if (!this.resurfaced) this.renderSortControl(header);
   }
 
   private renderSortControl(root: HTMLElement): void {
     const bar = root.createDiv('at-sortbar');
-    const select = bar.createEl('select', { cls: 'at-sort dropdown' });
     const labels = sortLabels();
-    for (const s of sortsFor(this.lens)) {
-      select.createEl('option', { text: labels[s], attr: { value: s } });
-    }
-    select.value = this.sort;
-    select.addEventListener('change', () => {
-      this.sort = select.value as Sort;
-      void this.render();
+    const chip = bar.createEl('button', { cls: 'at-sort-chip', attr: { 'aria-label': t('attention.sortLabel') } });
+    setIcon(chip.createSpan('at-btn-icon'), 'arrow-up-down');
+    chip.createSpan({ text: labels[this.sort] });
+    chip.addEventListener('click', e => {
+      const menu = new Menu();
+      for (const s of sortsFor(this.lens)) {
+        menu.addItem(i => i.setTitle(labels[s]).setChecked(s === this.sort).onClick(() => {
+          this.sort = s;
+          void this.render();
+        }));
+      }
+      menu.showAtMouseEvent(e);
     });
   }
 
@@ -329,8 +337,9 @@ export class ReviewView extends ItemView {
     // Acting on a mark from the list, rather than having to find it in the note
     // first. Revealed on hover so a long list stays quiet.
     const actions = el.createDiv('at-entry-actions');
-    const act = (label: string, title: string, fn: () => void, warn = false) => {
-      const b = actions.createEl('button', { cls: 'at-icon-btn', text: label });
+    const act = (icon: string, title: string, fn: () => void, warn = false) => {
+      const b = actions.createEl('button', { cls: 'clickable-icon at-icon-btn' });
+      setIcon(b, icon);
       b.setAttribute('aria-label', title);
       b.setAttribute('title', title);
       if (warn) b.addClass('mod-warning');
@@ -342,15 +351,15 @@ export class ReviewView extends ItemView {
     // Re-marking from the list: the passage came back to mind, which is worth
     // recording even when you aren't looking at it in the note.
     if (lost) {
-      act('⚲', t('attention.tooltipReattach'),
+      act('link', t('attention.tooltipReattach'),
           () => { void this.reattach(targetPath, annotation); });
     } else {
-      act('＋', t('attention.tooltipMarkAgain'),
+      act('plus', t('attention.tooltipMarkAgain'),
           () => { void this.markAgain(targetPath, annotation); });
     }
-    act('💬', isComment(annotation) ? t('attention.tooltipEditComment') : t('attention.tooltipAddComment'),
+    act('message-square', isComment(annotation) ? t('attention.tooltipEditComment') : t('attention.tooltipAddComment'),
         () => this.editComment(targetPath, annotation));
-    act('✕', t('attention.tooltipRemoveThisMark'),
+    act('x', t('attention.tooltipRemoveThisMark'),
         () => { void this.plugin.store.remove(targetPath, annotation.id); }, true);
 
     // A lost mark has nowhere to jump to; clicking it would do nothing.

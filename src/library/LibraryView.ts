@@ -30,6 +30,8 @@ export class LibraryView extends ItemView {
   private playlistDown: (() => void) | null = null;
   private tabsEl!: HTMLElement;
   private searchEl!: HTMLInputElement;
+  /** A tab without search has its name there instead. */
+  private headingEl!: HTMLElement;
   private readonly media: MediaList;
   private readonly archive: ArchiveList;
   private readonly progress: ProgressList;
@@ -71,7 +73,8 @@ export class LibraryView extends ItemView {
     root.empty();
     root.addClass('mo-lib');
     const bar = root.createDiv('mo-lib-bar');
-    const search = (this.searchEl = bar.createEl('input', { type: 'search', placeholder: t('library.filterPlaceholder'), cls: 'mo-lib-search' }));
+    this.headingEl = bar.createDiv('mo-lib-heading');
+    const search = (this.searchEl = bar.createDiv('search-input-container').createEl('input', { type: 'search', placeholder: t('library.filterPlaceholder'), cls: 'mo-lib-search' }));
     search.addEventListener('input', () => {
       this.filter = search.value.trim().toLowerCase();
       this.renderList();
@@ -181,7 +184,10 @@ export class LibraryView extends ItemView {
     statusEl.empty();
     this.tabsEl.querySelectorAll<HTMLElement>('.mo-lib-tab').forEach(b => b.toggleClass('is-active', b.dataset.tab === this.tab));
     this.searchEl.placeholder = t(this.tab === 'archive' ? 'library.filterArchive' : 'library.filterPlaceholder');
-    this.searchEl.toggle(this.tab !== 'playlist' && this.tab !== 'progress');
+    const searchable = this.tab !== 'playlist' && this.tab !== 'progress';
+    this.searchEl.parentElement?.toggle(searchable);
+    this.headingEl.toggle(!searchable);
+    this.headingEl.setText(t(this.tab === 'playlist' ? 'library.tabPlaylist' : 'library.tabProgress'));
     this.contentEl.toggleClass('mo-lib-on-progress', this.tab === 'progress');
     if (this.tab === 'playlist') this.playlistDown = renderPlaylist(listEl, this.plugin);
     else if (this.tab === 'progress') this.progress.render(listEl, statusEl);

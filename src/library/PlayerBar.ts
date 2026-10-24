@@ -40,14 +40,27 @@ function hash(text: string): number {
  */
 export function renderCover(parent: HTMLElement, subtitle: string, cls: string): HTMLElement {
   const from = subtitle.split(' · ')[0] || '♪';
+  // This vault's own recordings: a microphone, in the accent colour (as in the library's list).
+  if (from === t('library.collectionMine')) {
+    const own = parent.createDiv(`mo-cover mo-lib-own-cover ${cls}`);
+    setIcon(own, 'mic');
+    return own;
+  }
   const hue = hash(from) % 360;
   const cover = parent.createDiv(`mo-cover ${cls}`);
   cover.style.setProperty('--mo-cover-a', `hsl(${hue} 55% 52%)`);
   cover.style.setProperty('--mo-cover-b', `hsl(${(hue + 50) % 360} 60% 30%)`);
   // A small one has room for two characters (or a short word) only.
-  const short = /[\u3400-\u9fff]/.test(from) ? Array.from(from).slice(0, 2).join('') : from.slice(0, 4);
+  const short = /[\u3400-\u9fff]/.test(from) ? Array.from(from).slice(0, 2).join('') : initials(from);
   cover.createSpan({ cls: 'mo-cover-text', text: cls.includes('is-small') ? short : from });
   return cover;
+}
+
+/** A latin name, small: its initials (`mo-test` → MT, `source` → S, `me` → ME). */
+function initials(name: string): string {
+  const words = name.split(/[\s\-_./]+/).filter(Boolean);
+  if (words.length > 1) return words.slice(0, 2).map(w => w[0]).join('').toUpperCase();
+  return (name.length <= 3 ? name : name[0]).toUpperCase();
 }
 
 /** The ring round the play button: how far it has played. */
@@ -406,7 +419,7 @@ export function renderPlaylist(parent: HTMLElement, plugin: MediaTranscriptPlugi
     root.empty();
     const entries = playlist.entries;
     const head = root.createDiv('mo-pl-head');
-    head.createSpan({ cls: 'mo-pl-count', text: t('library.playlistCount', { count: entries.length }) });
+    head.createSpan({ cls: 'mo-pl-count', text: t('library.playlistItems', { count: entries.length }) });
     if (entries.length) {
       const clear = head.createEl('button', { cls: 'mo-pl-clear', text: t('library.playlistClear') });
       clear.addEventListener('click', () => playlist.clear());
@@ -424,11 +437,15 @@ export function renderPlaylist(parent: HTMLElement, plugin: MediaTranscriptPlugi
     row.toggleClass('is-playing', playing);
     const grip = row.createDiv({ cls: 'mo-pl-grip', attr: { 'aria-label': t('library.playlistMove') } });
     setIcon(grip, 'grip-vertical');
-    renderCover(row, e.subtitle, 'is-small');
+    // Entries saved by an older version have the path for a title and no subtitle.
+    const named = e.title.includes('/') && e.title === e.path;
+    const title = named ? e.path.slice(e.path.lastIndexOf('/') + 1).replace(/\.[^.]+$/, '') : e.title;
+    const subtitle = e.subtitle || (named ? e.path.slice(0, e.path.indexOf('/')) : '');
+    renderCover(row, subtitle, 'is-small');
     const main = row.createDiv('mo-pl-main');
-    main.createDiv({ cls: 'mo-pl-title', text: e.title });
+    main.createDiv({ cls: 'mo-pl-title', text: title });
     const stats = plugin.cache.statsOf(e.key);
-    const meta = [e.subtitle];
+    const meta = [subtitle];
     if (stats?.duration) meta.push(stats.position > 10 ? t('library.playlistLeft', { time: formatDuration(Math.max(0, stats.duration - stats.position)) }) : formatDuration(stats.duration));
     main.createDiv({ cls: 'mo-pl-meta', text: meta.filter(Boolean).join(' · ') });
     if (playing) {

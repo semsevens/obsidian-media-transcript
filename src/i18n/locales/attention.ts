@@ -3,6 +3,7 @@ const en = {
   // Plugin
   'attention.ribbon': 'Attention',
   'attention.viewTitle': 'Attention',
+  'attention.sortLabel': 'Order',
   'attention.commandOpenReview': 'Open review',
   'attention.noticeSidecarOrphan': 'Attention: “{name}” no longer exists. Its marks are still here — delete this file to discard them.',
   'attention.noticeTranscriptMovedOne': 'Attention: {count} transcript mark now filed under their subtitle track.',
@@ -140,6 +141,7 @@ const zh: Partial<Record<keyof typeof en, string>> = {
   // Plugin
   'attention.ribbon': '标注',
   'attention.viewTitle': '标注',
+  'attention.sortLabel': '排序',
   'attention.commandOpenReview': '打开回顾面板',
   'attention.noticeSidecarOrphan': '标注：“{name}”已不存在。它的标注仍保留在这里——删除此文件即可丢弃。',
   'attention.noticeTranscriptMovedOne': '标注：{count} 条转录稿标注已归入对应的字幕轨。',
