@@ -1,10 +1,12 @@
 import { Notice, setIcon } from 'obsidian';
 import type MediaTranscriptPlugin from '../main';
-import type { BackupRun, IndexEntry, Job, RemoteUpload } from './client';
-import { backsUp, buildProgress, lastRuns, secondsOf, type Progress, type ProgressRow, type Section } from './progress';
-import { describe, roughly } from './UploadStatus';
+import type { BackupRun, IndexEntry, Job, RemoteUpload, ServerStatus } from './client';
+import {
+  backsUp, buildProgress, dayOf, lastRuns, phasesOf, secondsOf, turnaround, workerState,
+  type Phase, type Progress, type ProgressRow, type Section,
+} from './progress';
+import { describe } from './UploadStatus';
 import { collectionFolder } from './transcriptSync';
-import { formatTime } from '../utils/subtitleParser';
 import { formatSize } from '../utils/format';
 import { t } from '../i18n';
 
@@ -12,6 +14,10 @@ import { t } from '../i18n';
 const POLL_MS = 15_000;
 /** Finished rows shown before "N more". */
 const SHOWN_DONE = 15;
+/** A wait shorter than this isn't worth a word. */
+const WAIT_WORTH_S = 60;
+/** A disk this full is a worry. */
+const DISK_FULL = 0.9;
 
 export interface ProgressHost {
   rerender(): void;
@@ -20,21 +26,27 @@ export interface ProgressHost {
 }
 
 const SECTIONS: Section[] = ['running', 'queued', 'failed', 'backup', 'done'];
+const VIDEO = /\.(mp4|mov|m4v|mkv|webm|avi)$/i;
 
 /**
- * The progress tab: every file on its way, from whichever device sent it to
- * the transcript in the vault and the nightly backup, each step with when it
- * began, how long it took and when it ended; and how the nightly backup went.
+ * The progress tab, a page of its own: how the server, the transcriber, the
+ * nightly backup and the disks are, at a glance; then every file on its way,
+ * from whichever device sent it to the transcript in the vault and the
+ * backup, each with a bar of where its time went. A file opens to show each
+ * step's time.
  */
 export class ProgressList {
   private index: IndexEntry[] = [];
   private jobs: Job[] = [];
   private uploads: RemoteUpload[] = [];
   private runs: BackupRun[] = [];
+  private status: ServerStatus | null = null;
   private error: string | null = null;
   loaded = false;
   private filter: Section | null = null;
   private allDone = false;
+  /** Files opened to their steps. */
+  private open = new Set<string>();
   /** Per job: how far the worker last said it was, and when that changed (seconds). */
   private said = new Map<number, { sec: number; at: number }>();
   private progress: Progress = { rows: [], counts: { running: 0, queued: 0, backup: 0, failed: 0, done: 0 } };
@@ -48,16 +60,18 @@ export class ProgressList {
       return;
     }
     try {
-      const [index, jobs, uploads, runs] = await Promise.all([
+      const [index, jobs, uploads, runs, status] = await Promise.all([
         library.index(),
         library.jobs(),
         library.uploads().catch(() => [] as RemoteUpload[]),     // a server before 0.9
         library.backupRuns().catch(() => [] as BackupRun[]),
+        library.status().catch(() => null),                      // a server before 0.10
       ]);
       this.index = index;
       this.jobs = jobs.jobs;
       this.uploads = uploads;
       this.runs = runs;
+      this.status = status;
       this.plugin.transcriptSync.remember(jobs.jobs);
       this.error = null;
       this.loaded = true;
@@ -112,177 +126,297 @@ export class ProgressList {
 
   render(list: HTMLElement, status: HTMLElement): void {
     this.build();
-    if (this.error) status.createDiv({ cls: 'mo-lib-error', text: this.error });
+    if (this.error && !this.loaded) status.createDiv({ cls: 'mo-lib-error', text: this.error });
     if (!this.loaded) {
       if (!this.error) status.setText(t('library.loading'));
       return;
     }
+    const now = Date.now() / 1000;
     const root = list.createDiv('mo-prog');
-    if (backsUp(this.index, this.plugin.library.folder)) this.renderBackup(root);
-    this.renderSummary(root);
+    this.renderOverview(root, now);
+    this.renderTabs(root);
     const { rows } = this.progress;
     let any = false;
     for (const section of SECTIONS) {
       if (this.filter && this.filter !== section) continue;
-      let items = rows.filter(r => r.section === section);
+      const items = rows.filter(r => r.section === section);
       if (!items.length) continue;
       any = true;
       const box = root.createDiv(`mo-prog-section is-${section}`);
-      box.createDiv({ cls: 'mo-prog-heading', text: `${t(`library.progress.${section}`)} · ${items.length}` });
-      const more = section === 'done' && !this.allDone && items.length > SHOWN_DONE ? items.length - SHOWN_DONE : 0;
-      if (more) items = items.slice(0, SHOWN_DONE);
-      for (const r of items) this.renderRow(box, r);
-      if (more || (section === 'done' && this.allDone && items.length > SHOWN_DONE)) {
-        const b = box.createEl('button', { cls: 'mo-act-more', text: more ? t('library.activityMore', { count: more }) : t('library.activityLess') });
-        b.addEventListener('click', () => { this.allDone = !this.allDone; this.host.rerender(); });
+      if (section === 'done') this.renderDone(box, items, now);
+      else {
+        this.heading(box, t(`library.progress.${section}`), items.length);
+        const cards = box.createDiv('mo-prog-cards');
+        for (const r of items) this.renderCard(cards, r, now);
       }
     }
     if (!any) root.createDiv({ cls: 'mo-prog-empty', text: t('library.progress.empty') });
   }
 
-  private renderBackup(root: HTMLElement): void {
-    const { last, lastOk } = lastRuns(this.runs);
-    const line = root.createDiv('mo-prog-backup');
-    setIcon(line.createSpan('mo-prog-backup-icon'), 'hard-drive');
-    const text = line.createDiv('mo-prog-backup-text');
-    if (!last) {
-      text.createSpan({ text: t('library.progress.backupNone') });
-      return;
-    }
-    const when = secondsOf(last.started);
-    const took = when !== undefined && last.finished ? (secondsOf(last.finished) ?? when) - when : null;
-    if (last.ok) {
-      line.addClass('is-ok');
-      text.createSpan({ text: t('library.progress.backupOk', { when: when ? clock(when) : last.started, took: took !== null ? roughly(took) : '—' }) });
-    } else {
-      line.addClass('is-error');
-      text.createSpan({ text: t('library.progress.backupFailed', { when: when ? clock(when) : last.started }) });
-      const why = [...(last.failed ?? []), ...(last.problems ?? [])].join(' · ');
-      if (why) text.createDiv({ cls: 'mo-prog-backup-why', text: why, attr: { title: why } });
-      const okAt = lastOk ? secondsOf(lastOk.started) : undefined;
-      text.createDiv({ cls: 'mo-prog-backup-why', text: okAt ? t('library.progress.backupLastOk', { when: clock(okAt) }) : t('library.progress.backupNeverOk') });
-    }
+  private heading(box: HTMLElement, text: string, count: number): void {
+    const h = box.createDiv('mo-prog-heading');
+    h.createSpan({ text });
+    h.createSpan({ cls: 'mo-prog-count', text: String(count) });
   }
 
-  private renderSummary(root: HTMLElement): void {
-    const bar = root.createDiv('mo-prog-summary');
-    const chip = (section: Section | null, label: string, count?: number) => {
-      const b = bar.createEl('button', { cls: 'mo-prog-chip', text: count === undefined ? label : `${label} ${count}` });
-      if (section) b.addClass(`is-${section}`);
-      b.toggleClass('is-active', this.filter === section);
-      if (count === 0) b.addClass('is-zero');
-      b.addEventListener('click', () => { this.filter = section; this.host.rerender(); });
+  // ── at a glance ──────────────────────────────────────────────────────────
+  private renderOverview(root: HTMLElement, now: number): void {
+    const grid = root.createDiv('mo-prog-overview');
+    const card = (icon: string, label: string, tone: 'ok' | 'busy' | 'warn' | 'error' | 'none', wide = false) => {
+      const c = grid.createDiv(`mo-prog-stat is-${tone}${wide ? ' is-wide' : ''}`);
+      const head = c.createDiv('mo-prog-stat-head');
+      setIcon(head.createSpan('mo-prog-stat-icon'), icon);
+      head.createSpan({ cls: 'mo-prog-stat-label', text: label });
+      head.createSpan('mo-prog-dot');
+      return c;
     };
-    chip(null, t('library.collectionAll'));
-    for (const s of SECTIONS) chip(s, t(`library.progress.${s}Short`), this.progress.counts[s]);
-  }
+    const value = (c: HTMLElement, text: string) => c.createDiv({ cls: 'mo-prog-stat-value', text });
+    const sub = (c: HTMLElement, text: string, title?: string) => c.createDiv({ cls: 'mo-prog-stat-sub', text, attr: title ? { title } : {} });
 
-  private renderRow(box: HTMLElement, r: ProgressRow): void {
-    const now = Date.now() / 1000;
-    const row = box.createDiv(`mo-prog-row is-${r.section}`);
-    const head = row.createDiv('mo-prog-head');
-    const name = head.createDiv({ cls: 'mo-prog-name', text: r.name, attr: { title: r.name } });
-    if (r.vaultPath) name.addEventListener('click', () => this.host.find(r.name));
-    head.createDiv({ cls: 'mo-prog-total', text: this.total(r, now) });
+    // The server.
+    const st = this.status;
+    const online = !this.error;
+    const server = card('server', t('library.progress.server'), online ? 'ok' : 'error');
+    value(server, online ? t('library.progress.serverOnline') : t('library.progress.serverOffline'));
+    if (!online) sub(server, this.error ?? '', this.error ?? undefined);
+    else if (st) sub(server, `${t('library.progress.serverHolds', { count: st.library.vaultFiles, size: formatSize(st.library.vaultBytes) })} · v${st.version}`);
 
-    const fraction = this.fraction(r);
-    if (fraction !== null) {
-      const track = row.createDiv('mo-act-track');
-      track.createDiv('mo-act-fill');
-      row.style.setProperty('--mo-act', String(fraction));
-    }
+    // The transcriber.
+    const w = workerState(st, this.jobs, now);
+    const waiting = this.jobs.filter(j => j.state === 'queued').length;
+    const worker = card('audio-lines', t('library.progress.worker'),
+      w.state === 'busy' ? 'busy' : w.state === 'idle' ? 'ok' : w.state === 'offline' ? (waiting ? 'error' : 'warn') : 'none');
+    value(worker, w.state === 'busy' ? (w.count > 1 ? t('library.progress.workerBusyMany', { count: w.count }) : t('library.progress.workerBusy'))
+      : w.state === 'idle' ? t('library.progress.workerIdle')
+        : w.state === 'offline' ? t('library.progress.workerOffline') : t('library.progress.workerUnknown'));
+    const queue = waiting ? t('library.progress.workerQueue', { count: waiting }) : t('library.progress.workerNothing');
+    sub(worker, w.state === 'offline' ? `${t('library.progress.workerSeen', { ago: brief(now - w.seen) })} · ${queue}` : queue);
 
-    const steps = row.createDiv('mo-prog-steps');
-    const step = (icon: string, state: string, text: string, title?: string) => {
-      const s = steps.createSpan(`mo-act-step is-${state}`);
-      setIcon(s.createSpan('mo-act-step-icon'), state === 'done' ? 'check' : state === 'failed' ? 'x' : icon);
-      s.createSpan({ text });
-      if (title) s.setAttr('title', title);
-    };
-    const u = r.upload;
-    if (u) {
-      const device = u.device ? ` · ${u.device}` : '';
-      if (u.state === 'done') {
-        const took = u.began !== undefined && u.ended !== undefined ? t('library.progress.took', { took: roughly(u.ended - u.began) }) : '';
-        step('upload', 'done', `${t('library.progress.uploadedAt', { when: u.ended !== undefined ? clock(u.ended) : '' })}${took}${device}`);
-      } else if (u.state === 'active') {
-        const pct = u.size ? Math.floor(((u.sent ?? 0) / u.size) * 100) : 0;
-        step('upload', 'active', `${t('library.progress.uploading', { pct })}${device}`);
-      } else if (u.state === 'paused') {
-        const pct = u.size ? Math.floor(((u.sent ?? 0) / u.size) * 100) : 0;
-        step('upload', 'waiting', `${t('library.progress.uploadPaused', { pct })}${device}`);
-      } else {
-        step('upload', 'waiting', u.place && u.place > 1 ? t('library.stepUploadQueued', { place: u.place }) : t('library.stepUploadNext'));
+    // The nightly backup: only for a vault it takes.
+    if (backsUp(this.index, this.plugin.library.folder)) {
+      const { last, lastOk } = lastRuns(this.runs);
+      const backup = card('hard-drive', t('library.progress.backupCard'), !last ? 'none' : last.ok ? 'ok' : 'error', true);
+      if (!last) value(backup, t('library.progress.backupCardNone'));
+      else {
+        const when = secondsOf(last.started);
+        const took = when !== undefined && last.finished ? (secondsOf(last.finished) ?? when) - when : null;
+        value(backup, last.ok ? t('library.progress.backupCardOk') : t('library.progress.backupCardFailed'));
+        sub(backup, t('library.progress.backupCardWhen', { when: when ? clock(when) : last.started, took: took !== null ? brief(took) : '—' }));
+        if (!last.ok) {
+          const why = [...(last.failed ?? []), ...(last.problems ?? [])].join(' · ');
+          if (why) sub(backup, why, why).addClass('is-error');
+          const okAt = lastOk ? secondsOf(lastOk.started) : undefined;
+          sub(backup, okAt ? t('library.progress.backupLastOk', { when: clock(okAt) }) : t('library.progress.backupNeverOk'));
+        }
       }
     }
-    const tr = r.transcribe;
-    if (tr.state === 'done' && tr.ended !== undefined) {
-      const wait = tr.queued !== undefined && tr.began !== undefined && tr.began - tr.queued >= 60 ? t('library.progress.waited', { took: roughly(tr.began - tr.queued) }) : '';
-      const took = tr.began !== undefined ? t('library.progress.took', { took: roughly(tr.ended - tr.began) }) : '';
-      step('audio-lines', 'done', `${t('library.progress.transcribedAt', { when: clock(tr.ended) })}${wait}${took}`);
-    } else if (tr.state === 'done') {
-      step('audio-lines', 'done', t('library.stepTranscribed'));
-    } else if (tr.state === 'active') {
-      const at = tr.total && tr.done !== undefined ? t('library.stepTranscribingAt', { done: formatTime(tr.done), total: formatTime(tr.total) }) : t('library.stepTranscribing');
-      step('audio-lines', 'active', at);
-    } else if (tr.state === 'queued') {
-      const waited = tr.queued !== undefined ? t('library.progress.waiting', { took: roughly(now - tr.queued) }) : '';
-      step('audio-lines', 'waiting', `${t('library.stepQueued', { place: tr.place ?? 1 })}${waited}`);
-    } else if (tr.state === 'failed') {
-      step('audio-lines', 'failed', t('library.stepFailed'), tr.error ?? undefined);
-    } else if (u?.state === 'done') {
-      step('audio-lines', 'waiting', t('library.progress.notTranscribed'));
-    } else {
-      step('audio-lines', 'waiting', t('library.stepTranscribe'));
-    }
-    if (r.inVault !== null) step('file-text', r.inVault ? 'done' : 'waiting', r.inVault ? t('library.stepInVault') : t('library.stepToVault'));
-    if (r.backup) {
-      if (r.backup.at !== undefined) step('hard-drive', 'done', t('library.progress.backedUpAt', { when: clock(r.backup.at) }));
-      else step('hard-drive', 'waiting', t('library.stepBackup'));
-    }
 
-    const detail = this.detail(r, now);
-    if (detail) row.createDiv({ cls: r.section === 'failed' ? 'mo-act-detail is-error' : 'mo-act-detail', text: detail, attr: { title: detail } });
+    // The disks.
+    if (st?.disks.length) {
+      const fullest = Math.max(...st.disks.map(d => (d.total - d.free) / d.total));
+      const storage = card('database', t('library.progress.storage'), fullest >= DISK_FULL ? 'warn' : 'ok', true);
+      for (const d of st.disks) {
+        const used = (d.total - d.free) / d.total;
+        const row = storage.createDiv(`mo-prog-disk${used >= DISK_FULL ? ' is-full' : ''}`);
+        const line = row.createDiv('mo-prog-disk-line');
+        line.createSpan({ text: d.key === 'library' ? t('library.progress.diskLibrary') : t('library.progress.diskSystem') });
+        line.createSpan({ cls: 'mo-prog-disk-free', text: `${Math.round(used * 100)}% · ${t('library.progress.diskFree', { free: formatSize(d.free) })}` });
+        row.createDiv('mo-prog-meter').createDiv('mo-prog-meter-fill').style.width = `${Math.min(100, used * 100)}%`;
+        row.setAttr('title', `${formatSize(d.total - d.free)} / ${formatSize(d.total)}`);
+      }
+    }
+  }
+
+  private renderTabs(root: HTMLElement): void {
+    const bar = root.createDiv('mo-prog-tabs');
+    const tab = (section: Section | null, label: string, count?: number) => {
+      const b = bar.createEl('button', { cls: 'mo-prog-tab' });
+      b.createSpan({ text: label });
+      if (count !== undefined) b.createSpan({ cls: 'mo-prog-tab-count', text: String(count) });
+      if (section) b.addClass(`is-${section}`);
+      b.toggleClass('is-active', this.filter === section);
+      b.addEventListener('click', () => { this.filter = section; this.host.rerender(); });
+    };
+    tab(null, t('library.collectionAll'));
+    for (const s of SECTIONS) {
+      const n = this.progress.counts[s];
+      if (n || this.filter === s) tab(s, t(`library.progress.${s}Short`), n);
+    }
+  }
+
+  /** Finished files by the day they finished on, newest first. */
+  private renderDone(box: HTMLElement, items: ProgressRow[], now: number): void {
+    const more = !this.allDone && items.length > SHOWN_DONE ? items.length - SHOWN_DONE : 0;
+    const shown = more ? items.slice(0, SHOWN_DONE) : items;
+    const days = new Map<number, ProgressRow[]>();
+    for (const r of shown) {
+      const day = dayOf(r.ended ?? r.at);
+      days.set(day, [...(days.get(day) ?? []), r]);
+    }
+    for (const [day, rows] of days) {
+      this.heading(box, dayName(day, now), rows.length);
+      const cards = box.createDiv('mo-prog-cards');
+      for (const r of rows) this.renderCard(cards, r, now);
+    }
+    if (more || (this.allDone && items.length > SHOWN_DONE)) {
+      const b = box.createEl('button', { cls: 'mo-act-more', text: more ? t('library.activityMore', { count: more }) : t('library.activityLess') });
+      b.addEventListener('click', () => { this.allDone = !this.allDone; this.host.rerender(); });
+    }
+  }
+
+  // ── a file ───────────────────────────────────────────────────────────────
+  private renderCard(parent: HTMLElement, r: ProgressRow, now: number): void {
+    const open = this.open.has(r.key);
+    const card = parent.createDiv(`mo-prog-card is-${r.section}${open ? ' is-open' : ''}`);
+    card.addEventListener('click', e => {
+      if ((e.target as HTMLElement).closest('button')) return;
+      if (open) this.open.delete(r.key);
+      else this.open.add(r.key);
+      this.host.rerender();
+    });
+
+    const top = card.createDiv('mo-prog-card-top');
+    const kind = r.vaultPath === null && r.upload === null && r.transcribe.job?.path.startsWith('_archive/') ? 'web' : VIDEO.test(r.key) ? 'video' : 'audio';
+    setIcon(top.createDiv(`mo-prog-icon is-${kind}`), kind === 'web' ? 'globe' : kind === 'video' ? 'film' : 'audio-lines');
+    const main = top.createDiv('mo-prog-main');
+    main.createDiv({ cls: 'mo-prog-name', text: r.name, attr: { title: r.name } });
+    const meta = this.meta(r);
+    if (meta) main.createDiv({ cls: 'mo-prog-meta', text: meta });
+    const side = top.createDiv('mo-prog-side');
+    const [pill, under] = this.pill(r, now);
+    side.createSpan({ cls: `mo-prog-pill is-${r.section}`, text: pill });
+    if (under) side.createDiv({ cls: 'mo-prog-under', text: under });
+
+    const body = card.createDiv('mo-prog-card-body');
+    const phases = phasesOf(r, now);
+    const left = r.transcribe.state === 'active' && r.transcribe.left ? r.transcribe.left : 0;
+    const sending = r.upload && (r.upload.state === 'active' || r.upload.state === 'paused') && r.upload.size ? r.upload : null;
+    if (sending) {
+      // How much is in, rather than how long it has taken.
+      const bar = body.createDiv('mo-prog-bar');
+      const sent = Math.min(1, (sending.sent ?? 0) / (sending.size ?? 1));
+      if (sent > 0) bar.createDiv(`mo-prog-seg is-upload${sending.state === 'active' ? ' is-live' : ''}`).style.flexGrow = String(sent);
+      bar.createDiv('mo-prog-seg is-left').style.flexGrow = String(1 - sent);
+    } else if (phases.length) {
+      const bar = body.createDiv('mo-prog-bar');
+      for (const p of phases) {
+        const seg = bar.createDiv(`mo-prog-seg is-${p.kind}${p.live ? ' is-live' : ''}`);
+        seg.style.flexGrow = String(Math.max(1, p.to - p.from));
+        seg.setAttr('title', phaseText(p));
+      }
+      if (left) bar.createDiv('mo-prog-seg is-left').style.flexGrow = String(left);
+    }
+    const legend = body.createDiv('mo-prog-legend');
+    for (const p of phases) {
+      if (p.kind === 'wait' && !p.live && p.to - p.from < WAIT_WORTH_S) continue;
+      const item = legend.createSpan(`mo-prog-leg is-${p.kind}`);
+      item.createSpan('mo-prog-leg-dot');
+      item.createSpan({ text: phaseText(p) });
+    }
+    if (left) legend.createSpan({ cls: 'mo-prog-leg is-left', text: t('library.progress.phaseLeft', { took: brief(left) }) });
+    if (r.inVault === false && r.transcribe.state === 'done') this.badge(legend, 'file-text', t('library.stepToVault'), 'wait');
+    if (r.backup) {
+      if (r.backup.at !== undefined) this.badge(legend, 'hard-drive', clockIn(r.backup.at, r, now), 'ok');
+      else if (r.section !== 'running' && r.section !== 'queued') this.badge(legend, 'hard-drive', t('library.progress.pillBackup'), 'wait');
+    }
+    if (!legend.childElementCount) legend.remove();
+
+    if (r.section === 'failed' && r.transcribe.error && !open) body.createDiv({ cls: 'mo-prog-error', text: r.transcribe.error, attr: { title: r.transcribe.error } });
+    if (open) this.renderSteps(card, r, now);
+  }
+
+  private badge(parent: HTMLElement, icon: string, text: string, tone: 'ok' | 'wait'): void {
+    const b = parent.createSpan(`mo-prog-badge is-${tone}`);
+    setIcon(b.createSpan('mo-prog-badge-icon'), icon);
+    b.createSpan({ text });
+  }
+
+  /** Under the name: how big, from which device. */
+  private meta(r: ProgressRow): string {
+    const parts: string[] = [];
+    const u = r.upload;
+    if (u?.live) parts.push(describe(u.live).detail);
+    else if (u && (u.state === 'active' || u.state === 'paused') && u.size) parts.push(`${formatSize(u.sent ?? 0)} / ${formatSize(u.size)}`);
+    else if (u?.size) parts.push(formatSize(u.size));
+    if (u?.device) parts.push(t('library.progress.fromDevice', { device: u.device }));
+    if (!u && r.transcribe.job?.path.startsWith('_archive/')) parts.push(t('library.progress.archived'));
+    return parts.join(' · ');
+  }
+
+  /** The state in a word, and under it the time that matters: when it will be done, how long it took. */
+  private pill(r: ProgressRow, now: number): [string, string | null] {
+    const u = r.upload;
+    const tr = r.transcribe;
+    const pct = (a?: number, b?: number) => (a !== undefined && b ? Math.min(99, Math.floor((a / b) * 100)) : 0);
+    switch (r.section) {
+      case 'running':
+        if (u?.state === 'active') return [t('library.progress.pillUpload', { pct: pct(u.sent, u.size) }), t('library.progress.goingFor', { took: brief(now - (u.began ?? r.started)) })];
+        if (tr.state === 'active') {
+          const word = tr.total && tr.done !== undefined ? t('library.progress.pillTranscribe', { pct: pct(tr.done, tr.total) }) : t('library.progress.pillTranscribing');
+          return [word, tr.left ? t('library.progress.eta', { when: clock(now + tr.left) }) : null];
+        }
+        return [t('library.progress.pillToVault'), null];
+      case 'queued': {
+        if (u?.state === 'paused') return [t('library.progress.pillPaused'), u.moved !== undefined ? t('library.progress.pausedSince', { when: clock(u.moved) }) : null];
+        const place = u && u.state !== 'done' ? u.place ?? 1 : tr.place ?? 1;
+        const since = u && u.state !== 'done' ? r.started : tr.queued ?? r.started;
+        return [t('library.progress.pillPlace', { place }), t('library.progress.waitingFor', { took: brief(now - since) })];
+      }
+      case 'failed':
+        return [t('library.progress.pillFailed'), tr.ended !== undefined ? clockIn(tr.ended, r, now) : null];
+      case 'backup':
+        return [t('library.progress.pillBackup'), t('library.progress.waitingFor', { took: brief(now - (u?.ended ?? r.started)) })];
+      case 'done': {
+        const end = tr.ended ?? u?.ended ?? r.ended ?? r.at;
+        const took = turnaround(r);
+        return [clockIn(end, r, now), took !== null ? t('library.progress.inAll', { took: brief(took) }) : null];
+      }
+    }
+  }
+
+  /** Opened: each step with its time, and what can be done. */
+  private renderSteps(card: HTMLElement, r: ProgressRow, now: number): void {
+    const box = card.createDiv('mo-prog-steps');
+    const list = box.createDiv('mo-prog-timeline');
+    const step = (tone: 'done' | 'active' | 'wait' | 'failed', label: string, when?: number, note?: string) => {
+      const s = list.createDiv(`mo-prog-tl is-${tone}`);
+      s.createSpan('mo-prog-tl-dot');
+      const text = s.createDiv('mo-prog-tl-text');
+      text.createSpan({ cls: 'mo-prog-tl-label', text: label });
+      if (note) text.createSpan({ cls: 'mo-prog-tl-note', text: note });
+      if (when !== undefined) s.createSpan({ cls: 'mo-prog-tl-time', text: clock(when) });
+    };
+    const u = r.upload;
+    const tr = r.transcribe;
+    if (u) {
+      const device = u.device ? t('library.progress.fromDevice', { device: u.device }) : undefined;
+      if (u.state === 'queued') step('wait', t('library.progress.tlWaitingUpload'), r.started, u.place ? t('library.progress.pillPlace', { place: u.place }) : undefined);
+      else {
+        if (u.began !== undefined) step('done', t('library.progress.tlUploadBegan'), u.began, device);
+        if (u.state === 'done') step('done', t('library.progress.tlUploaded'), u.ended, u.began !== undefined && u.ended !== undefined ? brief(u.ended - u.began) : device);
+        else step(u.state === 'paused' ? 'wait' : 'active', u.state === 'paused' ? t('library.progress.pillPaused') : t('library.progress.pillUpload', { pct: u.size ? Math.floor(((u.sent ?? 0) / u.size) * 100) : 0 }), u.moved);
+      }
+    }
+    if (tr.state !== 'none') {
+      if (tr.queued !== undefined && (tr.began === undefined || tr.began - tr.queued >= WAIT_WORTH_S)) step(tr.state === 'queued' ? 'wait' : 'done', t('library.progress.tlQueued'), tr.queued, tr.state === 'queued' && tr.place ? t('library.progress.pillPlace', { place: tr.place }) : undefined);
+      if (tr.began !== undefined) step('done', t('library.progress.tlTranscribeBegan'), tr.began, tr.queued !== undefined && tr.began - tr.queued >= WAIT_WORTH_S ? t('library.progress.phaseWaitTranscribe', { took: brief(tr.began - tr.queued) }) : undefined);
+      if (tr.state === 'active') step('active', t('library.progress.pillTranscribing'), undefined, tr.left ? t('library.progress.eta', { when: clock(now + tr.left) }) : undefined);
+      if (tr.state === 'done') step('done', t('library.progress.tlTranscribed'), tr.ended, tr.began !== undefined && tr.ended !== undefined ? brief(tr.ended - tr.began) : undefined);
+      if (tr.state === 'failed') step('failed', t('library.progress.tlFailed'), tr.ended, tr.error ?? undefined);
+    }
+    if (r.inVault !== null) step(r.inVault ? 'done' : 'wait', r.inVault ? t('library.progress.tlInVault') : t('library.progress.tlToVault'));
+    if (r.backup) step(r.backup.at !== undefined ? 'done' : 'wait', r.backup.at !== undefined ? t('library.progress.tlBackedUp') : t('library.progress.tlNotBackedUp'), r.backup.at);
+
+    const actions = box.createDiv('mo-prog-actions');
+    if (r.vaultPath) {
+      const find = actions.createEl('button', { text: t('library.progress.showInMedia') });
+      find.addEventListener('click', () => this.host.find(r.name));
+    }
     if (r.section === 'failed' && r.vaultPath) {
-      const retry = row.createEl('button', { cls: 'mo-prog-retry', text: t('library.retry') });
+      const retry = actions.createEl('button', { cls: 'mod-cta', text: t('library.retry') });
       retry.addEventListener('click', () => { void this.retry(r); });
     }
-  }
-
-  /** The right side of the row: how long it all took, or has taken so far. */
-  private total(r: ProgressRow, now: number): string {
-    if (r.section === 'done' && r.ended !== null) {
-      return t('library.progress.doneIn', { took: roughly(r.ended - r.started), when: clock(r.ended) });
-    }
-    if (r.section === 'backup') {
-      const since = r.upload?.ended ?? r.started;
-      return t('library.progress.waitingFor', { took: roughly(now - since) });
-    }
-    if (r.section === 'failed') return r.transcribe.ended !== undefined ? clock(r.transcribe.ended) : '';
-    if (r.upload?.state === 'paused' && r.upload.moved !== undefined) return t('library.progress.pausedSince', { when: clock(r.upload.moved) });
-    return t('library.progress.goingFor', { took: roughly(now - r.started) });
-  }
-
-  private fraction(r: ProgressRow): number | null {
-    const u = r.upload;
-    if (u && (u.state === 'active' || u.state === 'paused') && u.size) return Math.min(1, (u.sent ?? 0) / u.size);
-    const tr = r.transcribe;
-    if (tr.state === 'active' && tr.total && tr.done !== undefined) return Math.min(1, tr.done / tr.total);
-    return null;
-  }
-
-  private detail(r: ProgressRow, now: number): string | null {
-    const u = r.upload;
-    if (u?.live) return describe(u.live).detail;
-    if (u && (u.state === 'active' || u.state === 'paused') && u.size) {
-      return `${formatSize(u.sent ?? 0)} / ${formatSize(u.size)}`;
-    }
-    const tr = r.transcribe;
-    if (tr.state === 'active' && tr.left) {
-      return `${t('library.stepLeft', { left: roughly(tr.left) })} · ${t('library.progress.eta', { when: clock(now + tr.left) })}`;
-    }
-    if (tr.state === 'failed') return tr.error ?? null;
-    return null;
+    if (!actions.childElementCount) actions.remove();
   }
 
   private async retry(r: ProgressRow): Promise<void> {
@@ -305,15 +439,50 @@ export class ProgressList {
   }
 }
 
+function phaseText(p: Phase): string {
+  const took = brief(p.to - p.from);
+  if (p.kind === 'upload') return t(p.live ? 'library.progress.phaseUploading' : 'library.progress.phaseUpload', { took });
+  if (p.kind === 'transcribe') return t(p.live ? 'library.progress.phaseTranscribing' : 'library.progress.phaseTranscribe', { took });
+  return t(p.before === 'upload' ? 'library.progress.phaseWaitUpload' : 'library.progress.phaseWaitTranscribe', { took });
+}
+
+/** A length of time, short: 45 s, 9 min, 1 h 16 min, 2 d 3 h. */
+export function brief(seconds: number): string {
+  const s = Math.max(1, Math.round(seconds));
+  if (s < 60) return t('library.progress.durS', { n: s });
+  const m = Math.round(s / 60);
+  if (m < 60) return t('library.progress.durM', { n: m });
+  const h = Math.floor(m / 60);
+  if (h < 48) return m % 60 ? t('library.progress.durHM', { h, m: m % 60 }) : t('library.progress.durH', { h });
+  return t('library.progress.durDH', { d: Math.floor(h / 24), h: h % 24 });
+}
+
+/** A moment within a finished file's day group: just the time when it is that day. */
+function clockIn(seconds: number, r: ProgressRow, now: number): string {
+  return r.section === 'done' && dayOf(seconds) === dayOf(r.ended ?? r.at) ? hm(seconds) : clock(seconds, now * 1000);
+}
+
+function hm(seconds: number): string {
+  const d = new Date(seconds * 1000);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+function dayName(day: number, now: number): string {
+  const today = dayOf(now);
+  const d = new Date(day);
+  if (day === today) return t('library.progress.today');
+  if (Math.round((today - day) / 86_400_000) === 1) return t('library.progress.yesterdayDay');
+  return t('library.progress.dayHeading', { month: d.getMonth() + 1, day: d.getDate() });
+}
+
 /** A moment, as short as it reads: today's time, yesterday's, or the date. */
 export function clock(seconds: number, now = Date.now()): string {
   const d = new Date(seconds * 1000);
-  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   const today = new Date(now);
   const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
   const days = Math.round((day(today) - day(d)) / 86_400_000);
-  if (days === 0) return hm;
-  if (days === 1) return t('library.progress.yesterday', { time: hm });
-  if (days === -1) return t('library.progress.tomorrow', { time: hm });
-  return t('library.progress.onDay', { month: d.getMonth() + 1, day: d.getDate(), time: hm });
+  if (days === 0) return hm(seconds);
+  if (days === 1) return t('library.progress.yesterday', { time: hm(seconds) });
+  if (days === -1) return t('library.progress.tomorrow', { time: hm(seconds) });
+  return t('library.progress.onDay', { month: d.getMonth() + 1, day: d.getDate(), time: hm(seconds) });
 }

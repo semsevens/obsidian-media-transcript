@@ -26,8 +26,8 @@ const ICONS: Record<Stage['kind'], string> = { upload: 'upload', transcribe: 'au
 /**
  * "In progress", atop the library: every file on its way through, from this
  * device's upload to the transcript in the vault and the nightly backup, each
- * step ticked off as it is done. Shown only while something is under way or
- * just finished.
+ * step ticked off as it is done. Shown only while something is under way:
+ * what is done is in the progress tab.
  */
 export function renderActivity(parent: HTMLElement, plugin: MediaTranscriptPlugin, host: ActivityHost): () => void {
   const device = new DeviceState(plugin.app);
@@ -67,7 +67,7 @@ export function renderActivity(parent: HTMLElement, plugin: MediaTranscriptPlugi
       backedUp: path => host.backedUp(path),
       mobile: Platform.isMobile,
       phoneDelay: PHONE_DELAY_S,
-    });
+    }).filter(a => !a.finished);  // what is done is in the progress tab
   };
 
   const paint = () => {

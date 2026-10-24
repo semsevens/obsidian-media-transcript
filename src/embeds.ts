@@ -38,6 +38,8 @@ const MISSING_EMBED = '.internal-embed.mod-empty-attachment[src]';
  */
 export class TranscriptCards {
   private players = new Set<HTMLMediaElement>();
+  /** Each card's player: how to look for its media again. */
+  private reloads = new WeakMap<HTMLMediaElement, () => Promise<void>>();
   private observers: MutationObserver[] = [];
   private docs: Document[] = [];
   private registered: string[] = [];
@@ -106,7 +108,11 @@ export class TranscriptCards {
         // The class or text can arrive after the element itself, so look at
         // the mutated element too, not only what was added.
         if (r.target.nodeType === Node.ELEMENT_NODE) this.scan(r.target as HTMLElement);
-        r.addedNodes.forEach(n => { if (n.nodeType === Node.ELEMENT_NODE) this.scan(n as HTMLElement); });
+        r.addedNodes.forEach(n => {
+          if (n.nodeType !== Node.ELEMENT_NODE) return;
+          this.scan(n as HTMLElement);
+          this.revive(n as HTMLElement);
+        });
       }
       this.reap();
     });
@@ -143,8 +149,22 @@ export class TranscriptCards {
 
   release(p: HTMLMediaElement) {
     p.pause();
+    p.dataset.mtReleased = '1';
     p.removeAttribute('src');
     p.load();
+  }
+
+  // Live Preview takes an embed off the page and puts the same one back (a
+  // redraw, a scroll): a card let go meanwhile looks for its media again,
+  // rather than stay an empty player at 0:00.
+  private revive(root: HTMLElement) {
+    const released = root.matches('[data-mt-released]') ? [root] : [];
+    released.push(...Array.from(root.querySelectorAll<HTMLElement>('[data-mt-released]')));
+    for (const p of released) {
+      const reload = this.reloads.get(p as HTMLMediaElement);
+      delete p.dataset.mtReleased;
+      if (reload && p.isConnected) void reload();
+    }
   }
 
   // ── The card ──────────────────────────────────────────────────────────────
@@ -213,6 +233,7 @@ export class TranscriptCards {
         attr: { src, controls: '', preload: 'metadata' },
       });
       this.players.add(player);
+      this.reloads.set(player, load);
     };
     await load();
   }

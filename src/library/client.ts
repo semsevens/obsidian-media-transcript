@@ -62,6 +62,16 @@ export interface BackupRun {
   problems?: string[];
 }
 
+/** How the server is: its disks, what the library holds, when each worker was last heard from (server 0.10). */
+export interface ServerStatus {
+  version: string;
+  now: number;
+  /** The library's disk, and the system's when it is another. */
+  disks: { key: 'library' | 'system'; total: number; used: number; free: number }[];
+  library: { files: number; bytes: number; vaultFiles: number; vaultBytes: number };
+  workers: { name: string; seen: number }[];
+}
+
 export interface Job {
   id: number;
   vault: string;
@@ -131,6 +141,11 @@ export class LibraryClient {
   async backupRuns(): Promise<BackupRun[]> {
     const r = await this.call('GET', 'backup-runs');
     return (r.json as { runs: BackupRun[] }).runs;
+  }
+
+  async status(): Promise<ServerStatus> {
+    const r = await this.call('GET', `status?vault=${encodeURIComponent(this.vault())}`);
+    return r.json as ServerStatus;
   }
 
   async trash(): Promise<TrashItem[]> {

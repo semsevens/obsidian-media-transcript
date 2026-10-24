@@ -1,4 +1,4 @@
-import type { BackupRun, IndexEntry, Job, RemoteUpload } from './client';
+import type { BackupRun, IndexEntry, Job, RemoteUpload, ServerStatus } from './client';
 import type { UploadStatus } from './uploader';
 import { timeLeft } from './activity';
 
@@ -266,4 +266,72 @@ function queuePlace(r: ProgressRow): number {
 export function lastRuns(runs: readonly BackupRun[]): { last: BackupRun | null; lastOk: BackupRun | null } {
   const sorted = [...runs].sort((a, b) => a.started.localeCompare(b.started));
   return { last: sorted[sorted.length - 1] ?? null, lastOk: [...sorted].reverse().find(r => r.ok) ?? null };
+}
+
+/** A stretch of a file's way, for its bar: sending, waiting its turn, being transcribed. */
+export interface Phase {
+  kind: 'upload' | 'wait' | 'transcribe';
+  /** What a wait is for. */
+  before?: 'upload' | 'transcribe';
+  from: number;
+  to: number;
+  /** Still going: `to` is now. */
+  live: boolean;
+}
+
+/** The stretches of a file's way, in order, as far as their times are known. */
+export function phasesOf(r: ProgressRow, now: number): Phase[] {
+  const out: Phase[] = [];
+  const add = (p: Phase) => {
+    const from = Math.max(p.from, out.length ? out[out.length - 1].to : -Infinity);
+    if (p.to > from) out.push({ ...p, from });
+  };
+  const u = r.upload;
+  if (u?.state === 'queued') add({ kind: 'wait', before: 'upload', from: r.started, to: now, live: true });
+  else if (u?.state === 'active') add({ kind: 'upload', from: u.began ?? r.started, to: now, live: true });
+  else if (u?.state === 'paused') add({ kind: 'upload', from: u.began ?? r.started, to: u.moved ?? now, live: false });
+  else if (u?.state === 'done' && u.began !== undefined && u.ended !== undefined) add({ kind: 'upload', from: u.began, to: u.ended, live: false });
+  const tr = r.transcribe;
+  if (tr.queued !== undefined && tr.state !== 'none') {
+    const from = Math.max(tr.queued, u?.ended ?? -Infinity);
+    if (tr.state === 'queued') add({ kind: 'wait', before: 'transcribe', from, to: now, live: true });
+    else if (tr.began !== undefined) add({ kind: 'wait', before: 'transcribe', from, to: tr.began, live: false });
+  }
+  if (tr.began !== undefined && (tr.state === 'active' || tr.state === 'done' || tr.state === 'failed')) {
+    const live = tr.state === 'active';
+    add({ kind: 'transcribe', from: tr.began, to: live ? now : tr.ended ?? now, live });
+  }
+  return out;
+}
+
+/** From the first moment known to the transcript (or the upload, for what isn't transcribed): what one waits for. */
+export function turnaround(r: ProgressRow): number | null {
+  const end = r.transcribe.ended ?? (r.transcribe.state === 'none' || r.transcribe.state === 'done' ? r.upload?.ended : undefined);
+  if (end === undefined) return null;
+  const start = Math.min(r.started, r.upload?.began ?? Infinity);
+  return end >= start ? end - start : null;
+}
+
+/** A worker silent for this long is off (it asks every minute). */
+export const WORKER_GONE_S = 180;
+
+export type WorkerState =
+  | { state: 'busy'; count: number }
+  | { state: 'idle'; seen: number }
+  | { state: 'offline'; seen: number }
+  | { state: 'unknown' };
+
+/** Is the transcription worker at it, waiting for work, or off? */
+export function workerState(status: ServerStatus | null, jobs: readonly Job[], now: number): WorkerState {
+  const count = jobs.filter(j => j.state === 'claimed' && now - (j.heartbeat ?? j.claimed ?? 0) < WORKER_GONE_S).length;
+  if (count) return { state: 'busy', count };
+  const seen = status?.workers.length ? Math.max(...status.workers.map(w => w.seen)) : undefined;
+  if (seen === undefined) return { state: 'unknown' };
+  return now - seen < WORKER_GONE_S ? { state: 'idle', seen } : { state: 'offline', seen };
+}
+
+/** The local day a moment fell on, to group finished files by. */
+export function dayOf(seconds: number): number {
+  const d = new Date(seconds * 1000);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 }

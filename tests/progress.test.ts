@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildProgress, lastRuns, leftFrom, secondsOf, RECENT_S, STALLED_S, type ProgressInput } from '../src/library/progress';
+import { buildProgress, lastRuns, leftFrom, phasesOf, secondsOf, turnaround, workerState, RECENT_S, STALLED_S, WORKER_GONE_S, type ProgressInput } from '../src/library/progress';
 import type { IndexEntry, Job } from '../src/library/client';
 import type { UploadStatus } from '../src/library/uploader';
 
@@ -141,5 +141,45 @@ describe('lastRuns', () => {
     expect(lastRuns(runs).last?.started).toBe('2026-10-24T03:30:00');
     expect(lastRuns(runs).lastOk?.started).toBe('2026-10-23T03:30:00');
     expect(lastRuns([])).toEqual({ last: null, lastOk: null });
+  });
+});
+
+describe('phasesOf', () => {
+  it('sending, waiting its turn, being transcribed: each from when to when', () => {
+    const e = entry('me/a.m4a', { began: iso(now - 4000), added: iso(now - 3600) });
+    const j = job('me/a.m4a', 'done', { created: now - 3600, claimed: now - 3000, finished: now - 1200 });
+    const [r] = buildProgress(input({ index: [e], jobs: [j], hasTranscript: () => true })).rows;
+    expect(phasesOf(r, now)).toEqual([
+      { kind: 'upload', from: now - 4000, to: now - 3600, live: false },
+      { kind: 'wait', before: 'transcribe', from: now - 3600, to: now - 3000, live: false },
+      { kind: 'transcribe', from: now - 3000, to: now - 1200, live: false },
+    ]);
+    expect(turnaround(r)).toBe(2800);
+  });
+
+  it('what goes on runs until now; an upload of unknown start has no stretch of its own', () => {
+    const e = entry('me/a.m4a', { added: iso(now - 600) });
+    const j = job('me/a.m4a', 'claimed', { created: now - 600, claimed: now - 300, progress: { sec: 10, duration: 100, running: true } });
+    const [r] = buildProgress(input({ index: [e], jobs: [j] })).rows;
+    expect(phasesOf(r, now)).toEqual([
+      { kind: 'wait', before: 'transcribe', from: now - 600, to: now - 300, live: false },
+      { kind: 'transcribe', from: now - 300, to: now, live: true },
+    ]);
+    expect(turnaround(r)).toBeNull();
+  });
+
+  it('a file waiting to upload waits for the upload', () => {
+    const [r] = buildProgress(input({ pending: ['D/b.m4a'], queuedAt: () => now - 90 })).rows;
+    expect(phasesOf(r, now)).toEqual([{ kind: 'wait', before: 'upload', from: now - 90, to: now, live: true }]);
+  });
+});
+
+describe('workerState', () => {
+  const status = (seen: number) => ({ version: '0.10.0', now, disks: [], library: { files: 0, bytes: 0, vaultFiles: 0, vaultBytes: 0 }, workers: [{ name: 'mac', seen }] });
+  it('at work, waiting for work, off, or not heard of since the server started', () => {
+    expect(workerState(status(now - 30), [job('me/a.m4a', 'claimed', { heartbeat: now - 10 })], now)).toEqual({ state: 'busy', count: 1 });
+    expect(workerState(status(now - 30), [], now)).toEqual({ state: 'idle', seen: now - 30 });
+    expect(workerState(status(now - WORKER_GONE_S - 1), [], now)).toEqual({ state: 'offline', seen: now - WORKER_GONE_S - 1 });
+    expect(workerState(null, [], now)).toEqual({ state: 'unknown' });
   });
 });
