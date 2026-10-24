@@ -9,6 +9,9 @@ import { renderActivity } from './ActivityPanel';
 import { t } from '../i18n';
 import { formatSize } from '../utils/format';
 
+/** A list older than this, looked at again, is fetched again. */
+const STALE_MS = 60_000;
+
 export const VIEW_TYPE_LIBRARY = 'media-one-library';
 
 /**
@@ -19,6 +22,7 @@ export const VIEW_TYPE_LIBRARY = 'media-one-library';
  */
 export class LibraryView extends ItemView {
   private filter = '';
+  private refreshedAt = 0;
   private listEl!: HTMLElement;
   private statusEl!: HTMLElement;
   private tab: 'media' | 'archive' | 'playlist' = 'media';
@@ -118,14 +122,26 @@ export class LibraryView extends ItemView {
     this.register(this.plugin.transcriptSync.onJobs(() => {
       if (this.media.takeJobs(this.plugin.transcriptSync.known) && this.tab === 'media') this.renderList();
     }));
+    // Left open, the list would keep what it showed then (a file backed up overnight still
+    // "not backed up"): looked at again a while later, it asks the server again.
+    const stale = () => {
+      if (this.tab === 'media' && this.contentEl.isShown() && Date.now() - this.refreshedAt > STALE_MS) void this.refresh(true);
+    };
+    this.registerDomEvent(window, 'focus', stale);
+    this.registerDomEvent(document, 'visibilitychange', () => { if (document.visibilityState === 'visible') stale(); });
+    this.registerEvent(this.app.workspace.on('active-leaf-change', leaf => { if (leaf === this.leaf) stale(); }));
     await this.refresh();
   }
 
-  async refresh(): Promise<void> {
+  /** `quietly`: on its own, not asked for: where the list was scrolled to stays. */
+  async refresh(quietly = false): Promise<void> {
     if (this.tab === 'playlist') return this.renderList();
+    this.refreshedAt = Date.now();
     if (this.tab === 'archive') await this.archive.refresh();
     else await this.media.refresh();
+    const top = this.contentEl.scrollTop;
     this.renderList();
+    if (quietly) this.contentEl.scrollTop = top;
   }
 
   private renderList(): void {
