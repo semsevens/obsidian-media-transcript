@@ -17,6 +17,8 @@ export interface ActivityHost {
   backedUp(path: string): boolean | null;
   /** Show this file in the list below. */
   find(name: string): void;
+  /** Open the progress tab: every file, with its times. */
+  seeAll(): void;
 }
 
 const ICONS: Record<Stage['kind'], string> = { upload: 'upload', transcribe: 'audio-lines', note: 'file-text', backup: 'hard-drive' };
@@ -33,6 +35,12 @@ export function renderActivity(parent: HTMLElement, plugin: MediaTranscriptPlugi
   const head = box.createDiv('mo-act-head');
   const caret = head.createSpan('mo-act-caret');
   const title = head.createSpan('mo-act-title');
+  const seeAll = head.createEl('a', { cls: 'mo-act-all', text: t('library.activitySeeAll'), attr: { href: '#' } });
+  seeAll.addEventListener('click', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    host.seeAll();
+  });
   const list = box.createDiv('mo-act-list');
   let open = device.get<boolean>('activityOpen', true);
   let all = false;

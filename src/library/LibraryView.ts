@@ -6,6 +6,7 @@ import { ArchiveList } from './ArchiveList';
 import { MediaList } from './MediaList';
 import { renderDock, renderPlaylist } from './PlayerBar';
 import { renderActivity } from './ActivityPanel';
+import { ProgressList } from './ProgressList';
 import { t } from '../i18n';
 import { formatSize } from '../utils/format';
 
@@ -18,19 +19,21 @@ export const VIEW_TYPE_LIBRARY = 'media-one-library';
  * The library on the Media One server, as a folder: play, rename, move and
  * delete media that may no longer be on this device, and restore it from the
  * server's trash. A second tab lists the web archive (images and videos saved
- * from notes).
+ * from notes); another, every file on its way (upload, transcription, backup).
  */
 export class LibraryView extends ItemView {
   private filter = '';
   private refreshedAt = 0;
   private listEl!: HTMLElement;
   private statusEl!: HTMLElement;
-  private tab: 'media' | 'archive' | 'playlist' = 'media';
+  private tab: 'media' | 'progress' | 'archive' | 'playlist' = 'media';
   private playlistDown: (() => void) | null = null;
   private tabsEl!: HTMLElement;
   private searchEl!: HTMLInputElement;
   private readonly media: MediaList;
   private readonly archive: ArchiveList;
+  private readonly progress: ProgressList;
+  private findName: (name: string) => void = () => {};
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: MediaTranscriptPlugin) {
     super(leaf);
@@ -40,6 +43,10 @@ export class LibraryView extends ItemView {
       delete: vaultPath => this.askDelete(vaultPath),
       restore: item => this.restore(item),
       confirm: (heading, body, action, onConfirm) => new ConfirmModal(this.app, heading, body, action, onConfirm, false).open(),
+    });
+    this.progress = new ProgressList(plugin, {
+      rerender: () => { if (this.tab === 'progress') this.renderList(true); },
+      find: name => this.findName(name),
     });
     this.archive = new ArchiveList(plugin, {
       confirm: (heading, body, action, onConfirm) => new ConfirmModal(this.app, heading, body, action, onConfirm).open(),
@@ -73,24 +80,32 @@ export class LibraryView extends ItemView {
     setIcon(refresh, 'refresh-cw');
     refresh.addEventListener('click', () => { void this.refresh(); });
     this.tabsEl = root.createDiv('mo-lib-tabs');
-    for (const [tab, label] of [['media', t('library.tabMedia')], ['archive', t('library.tabArchive')], ['playlist', t('library.tabPlaylist')]] as const) {
+    for (const [tab, label] of [['media', t('library.tabMedia')], ['progress', t('library.tabProgress')], ['archive', t('library.tabArchive')], ['playlist', t('library.tabPlaylist')]] as const) {
       const b = this.tabsEl.createEl('button', { text: label, cls: 'mo-lib-tab' });
       b.dataset.tab = tab;
-      b.addEventListener('click', () => {
-        this.tab = tab;
-        if (tab === 'archive' && !this.archive.loaded) void this.archive.refresh().then(() => this.renderList());
-        this.renderList();
-      });
+      b.addEventListener('click', () => this.showTab(tab));
     }
+    this.findName = name => {
+      this.tab = 'media';
+      search.value = name;
+      this.filter = name.toLowerCase();
+      this.renderList();
+    };
     this.register(renderActivity(root, this.plugin, {
       backedUp: path => this.media.backedUp(path),
-      find: name => {
-        this.tab = 'media';
-        search.value = name;
-        this.filter = name.toLowerCase();
-        this.renderList();
-      },
+      find: name => this.findName(name),
+      seeAll: () => this.showTab('progress'),
     }));
+    // The progress tab moves on its own: uploads, jobs, transcripts arriving, and the clock.
+    const progressPaint = () => { if (this.tab === 'progress' && this.progress.loaded) this.renderList(true); };
+    this.register(this.plugin.uploader.subscribe(progressPaint));
+    this.register(this.plugin.transcriptSync.onJobs(() => {
+      this.progress.takeJobs(this.plugin.transcriptSync.known);
+      progressPaint();
+    }));
+    this.register(this.plugin.transcripts.onChange(progressPaint));
+    this.registerInterval(this.progress.poll());
+    this.registerInterval(window.setInterval(progressPaint, 10_000));
     this.statusEl = root.createDiv('mo-lib-status');
     this.listEl = root.createDiv('mo-lib-list');
     // What plays goes on when the library closes: the player in the status bar
@@ -125,7 +140,7 @@ export class LibraryView extends ItemView {
     // Left open, the list would keep what it showed then (a file backed up overnight still
     // "not backed up"): looked at again a while later, it asks the server again.
     const stale = () => {
-      if (this.tab === 'media' && this.contentEl.isShown() && Date.now() - this.refreshedAt > STALE_MS) void this.refresh(true);
+      if ((this.tab === 'media' || this.tab === 'progress') && this.contentEl.isShown() && Date.now() - this.refreshedAt > STALE_MS) void this.refresh(true);
     };
     this.registerDomEvent(window, 'focus', stale);
     this.registerDomEvent(document, 'visibilitychange', () => { if (document.visibilityState === 'visible') stale(); });
@@ -138,13 +153,27 @@ export class LibraryView extends ItemView {
     if (this.tab === 'playlist') return this.renderList();
     this.refreshedAt = Date.now();
     if (this.tab === 'archive') await this.archive.refresh();
+    else if (this.tab === 'progress') await this.progress.refresh();
     else await this.media.refresh();
-    const top = this.contentEl.scrollTop;
-    this.renderList();
-    if (quietly) this.contentEl.scrollTop = top;
+    this.renderList(quietly);
   }
 
-  private renderList(): void {
+  private showTab(tab: LibraryView['tab']): void {
+    this.tab = tab;
+    if (tab === 'archive' && !this.archive.loaded) void this.archive.refresh().then(() => this.renderList());
+    // Fresh each time it is looked at: what moved since is the point of it.
+    if (tab === 'progress') void this.progress.refresh().then(() => this.renderList(true));
+    this.renderList();
+  }
+
+  /** `keepScroll`: redrawn on its own, not asked for: where the list was scrolled to stays. */
+  private renderList(keepScroll = false): void {
+    const top = this.contentEl.scrollTop;
+    this.draw();
+    if (keepScroll) this.contentEl.scrollTop = top;
+  }
+
+  private draw(): void {
     const { listEl, statusEl } = this;
     this.playlistDown?.();
     this.playlistDown = null;
@@ -152,8 +181,10 @@ export class LibraryView extends ItemView {
     statusEl.empty();
     this.tabsEl.querySelectorAll<HTMLElement>('.mo-lib-tab').forEach(b => b.toggleClass('is-active', b.dataset.tab === this.tab));
     this.searchEl.placeholder = t(this.tab === 'archive' ? 'library.filterArchive' : 'library.filterPlaceholder');
-    this.searchEl.toggle(this.tab !== 'playlist');
+    this.searchEl.toggle(this.tab !== 'playlist' && this.tab !== 'progress');
+    this.contentEl.toggleClass('mo-lib-on-progress', this.tab === 'progress');
     if (this.tab === 'playlist') this.playlistDown = renderPlaylist(listEl, this.plugin);
+    else if (this.tab === 'progress') this.progress.render(listEl, statusEl);
     else if (this.tab === 'archive') this.archive.render(listEl, statusEl, this.filter);
     else this.media.render(listEl, statusEl, this.filter);
   }

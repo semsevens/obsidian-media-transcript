@@ -1,5 +1,16 @@
-import { requestUrl, type RequestUrlResponse } from 'obsidian';
+import { Platform, requestUrl, type RequestUrlResponse } from 'obsidian';
 import { t } from '../i18n';
+
+/** This device, as the progress list names it: the computer's name, or the kind of phone. */
+export function deviceName(): string {
+  if (Platform.isMobile) return Platform.isIosApp ? 'iPhone' : 'Android';
+  try {
+    const os = (window as unknown as { require: (id: string) => { hostname(): string } }).require('os');
+    return os.hostname().replace(/\.local$/, '');
+  } catch {
+    return 'Desktop';
+  }
+}
 
 /** A media file in the library, as the server lists it. */
 export interface LibraryFile {
@@ -13,6 +24,8 @@ export interface LibraryFile {
   /** As it first came, before any rename: <vault folder>/<path then>. */
   original?: { path: string; size?: number };
   backup?: Record<string, string>;   // where a backup holds it → since when
+  began?: string;        // when its upload started
+  device?: string;       // which device sent it
 }
 
 /** An entry of the server's index.json: every media file it holds, in every folder. */
@@ -23,6 +36,30 @@ export interface IndexEntry {
   backup?: Record<string, string>;
   /** As it first came, before any rename. */
   original?: { path: string };
+  /** When its upload started, and which device sent it (uploads since 2.15). */
+  began?: string;
+  device?: string;
+}
+
+/** An upload in pieces under way, from any device. */
+export interface RemoteUpload {
+  id: string;
+  path: string;          // in the library
+  size: number;
+  received: number;
+  created?: string | null;
+  moved?: string | null; // when a piece last came
+  device?: string | null;
+}
+
+/** What the nightly backup said of one run. */
+export interface BackupRun {
+  where?: string;
+  started: string;
+  finished?: string;
+  ok: boolean;
+  failed?: string[];
+  problems?: string[];
 }
 
 export interface Job {
@@ -42,8 +79,8 @@ export interface Job {
   changed: number;
   claimed?: number;      // when the worker took it (server time)
   heartbeat?: number;    // when the worker last said it is on it
-  /** How far the worker is: seconds of audio done, of how many; running, or waiting its turn there. */
-  progress?: { sec?: number; duration?: number; running: boolean };
+  /** How far the worker is: seconds of audio done, of how many; running, or waiting its turn there; when `sec` last moved. */
+  progress?: { sec?: number; duration?: number; running: boolean; at?: number };
 }
 
 /** A file in the web archive on the server. */
@@ -82,6 +119,18 @@ export class LibraryClient {
   async files(): Promise<LibraryFile[]> {
     const r = await this.call('GET', `files?vault=${encodeURIComponent(this.vault())}`);
     return (r.json as { files: LibraryFile[] }).files;
+  }
+
+  /** Uploads in pieces under way into this vault, from every device. */
+  async uploads(): Promise<RemoteUpload[]> {
+    const r = await this.call('GET', `uploads?vault=${encodeURIComponent(this.vault())}`);
+    return (r.json as { uploads: RemoteUpload[] }).uploads;
+  }
+
+  /** The nightly backup's runs, newest last. */
+  async backupRuns(): Promise<BackupRun[]> {
+    const r = await this.call('GET', 'backup-runs');
+    return (r.json as { runs: BackupRun[] }).runs;
   }
 
   async trash(): Promise<TrashItem[]> {
@@ -186,7 +235,7 @@ export class LibraryClient {
    * the pieces already there (by offset), or the file if the server has it.
    */
   async uploadBegin(vaultPath: string, size: number, piece?: number): Promise<{ id: string; piece: number; have: number[] } | { entry: unknown }> {
-    const r = await this.call('POST', 'upload/begin', JSON.stringify({ vault: this.vault(), path: vaultPath, size, piece }), 'application/json');
+    const r = await this.call('POST', 'upload/begin', JSON.stringify({ vault: this.vault(), path: vaultPath, size, piece, device: deviceName() }), 'application/json');
     return r.json as { id: string; piece: number; have: number[] } | { entry: unknown };
   }
 
@@ -207,7 +256,7 @@ export class LibraryClient {
   }
 
   async upload(vaultPath: string, data: ArrayBuffer, sha256: string): Promise<boolean> {
-    const q = new URLSearchParams({ vault: this.vault(), path: vaultPath, sha256 });
+    const q = new URLSearchParams({ vault: this.vault(), path: vaultPath, sha256, device: deviceName() });
     const r = await this.call('PUT', `upload?${q.toString()}`, data, 'application/octet-stream');
     return r.status === 201;
   }
