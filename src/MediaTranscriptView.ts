@@ -466,7 +466,10 @@ export class MediaTranscriptView extends FileView {
     // Above: the picture as high as dragged to, or as the stylesheet has it.
     const high = this.plugin.settings.stackVideoPercent;
     root.toggleClass('has-video-height', next === 'stack' && high !== null);
-    if (high !== null) root.setCssProps({ '--mt-stack-video-h': `${Math.round((high / 100) * this.contentEl.clientHeight)}px` });
+    if (high !== null) {
+      const px = Math.min(this.stackVideoMax(), (high / 100) * this.contentEl.clientHeight);
+      root.setCssProps({ '--mt-stack-video-h': `${Math.round(px)}px` });
+    }
     this.wakeControls();
   }
 
@@ -479,6 +482,12 @@ export class MediaTranscriptView extends FileView {
       ? (settings.lowSideWidthPercent / 100) * width
       : (this.contentEl.querySelector('.mt-player-side')?.clientHeight ?? 0) * this.videoAspect();
     return `${Math.round(Math.max(160, Math.min(width - TRANSCRIPT_MIN_PX, wanted)))}px`;
+  }
+
+  /** Above, the picture grows no taller than its width allows: past that it only gains black bars. */
+  private stackVideoMax(): number {
+    const pane = this.contentEl;
+    return Math.min(pane.clientHeight * 0.7, pane.clientWidth / this.videoAspect());
   }
 
   private videoAspect(): number {
@@ -703,6 +712,13 @@ export class MediaTranscriptView extends FileView {
     let kept: (() => void) | null = null;
     let lastUp = 0;
 
+    // A finger on the line drags it, not Obsidian's swipes (a sidebar from the edge, pull down for commands).
+    for (const type of ['touchstart', 'touchmove'] as const) {
+      divider.addEventListener(type, e => {
+        e.stopPropagation();
+        if (type === 'touchmove') e.preventDefault();
+      }, { passive: false });
+    }
     divider.addEventListener('pointerdown', (e: PointerEvent) => {
       e.preventDefault();
       e.stopPropagation();
@@ -727,7 +743,7 @@ export class MediaTranscriptView extends FileView {
       if (!kept && Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) < 4) return;
       const pane = this.contentEl.getBoundingClientRect();
       if (drag.stack) {
-        const px = Math.max(80, Math.min(pane.height * 0.7, drag.height + e.clientY - drag.y));
+        const px = Math.max(80, Math.min(this.stackVideoMax(), drag.height + e.clientY - drag.y));
         root.addClass('has-video-height');
         root.setCssProps({ '--mt-stack-video-h': `${Math.round(px)}px` });
         const pct = Math.round((px / pane.height) * 100);
@@ -743,12 +759,23 @@ export class MediaTranscriptView extends FileView {
         };
       }
     });
+    // The line moves under the finger: the click that follows a drag or a double tap lands on
+    // whatever is there now (the picture: it would play). It is let go.
+    const swallowClick = () => {
+      const stop = (e: MouseEvent) => {
+        e.stopPropagation();
+        e.preventDefault();
+      };
+      window.addEventListener('click', stop, { capture: true, once: true });
+      window.setTimeout(() => window.removeEventListener('click', stop, { capture: true }), 500);
+    };
     const letGo = () => {
       if (!drag) return;
       const was = drag;
       drag = null;
       document.body.removeClass('mt-resizing', 'mt-resizing-rows');
       if (kept) {
+        swallowClick();
         kept();
         kept = null;
         void this.plugin.saveSettings();
@@ -758,6 +785,7 @@ export class MediaTranscriptView extends FileView {
       // Not moved: a second tap soon after gives the size back.
       const now = Date.now();
       if (now - lastUp < 400) {
+        swallowClick();
         if (was.stack) settings.stackVideoPercent = null;
         else if (was.overlay) settings.lowSideWidthPercent = null;
         else settings.playerWidthPercent = 75;
@@ -766,6 +794,13 @@ export class MediaTranscriptView extends FileView {
         lastUp = 0;
       } else lastUp = now;
     };
+    divider.addEventListener('dblclick', () => {
+      if (root.hasClass('is-stack')) settings.stackVideoPercent = null;
+      else if (root.hasClass('is-overlay')) settings.lowSideWidthPercent = null;
+      else settings.playerWidthPercent = 75;
+      void this.plugin.saveSettings();
+      this.applyVideoLayout();
+    });
     divider.addEventListener('pointerup', letGo);
     divider.addEventListener('pointercancel', letGo);
   }
