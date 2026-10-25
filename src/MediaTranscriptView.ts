@@ -10,6 +10,8 @@ import { subtitleBaseName } from './utils/mediaMatch';
 import { trackMarker } from './utils/transcriptSource';
 import type { ResolvedMedia } from './mediaLocator';
 import type { VideoLayout } from './settings';
+import type { QueueEntry } from './library/playlist';
+import { formatSize } from './utils/format';
 import { pickArrangement, SIDE_MIN_WIDTH_PORTRAIT, type Arrangement } from './ui/videoLayout';
 import { parseSubtitle, SubtitleSegment, formatTime } from './utils/subtitleParser';
 import { parseTimeFragment, timeFragment } from './utils/timeFragment';
@@ -34,6 +36,16 @@ function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+interface OnServer {
+  path: string;
+  size: number;
+  listen: string | null;  // a video's audio twin
+  listenSize: number;
+}
+
+/** Beside and lower than this, the controls lie over the picture. */
+const OVERLAY_MAX_HEIGHT = 480;
+const IDLE_MS = 3000;
 const CLEAR_PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
 export class MediaTranscriptView extends FileView {
@@ -49,6 +61,11 @@ export class MediaTranscriptView extends FileView {
   private track: FoundSubtitleFile | null = null;
   private trackChip: HTMLElement | null = null;
   private controls: { destroy: () => void } | null = null;
+  /** What the server knows of this media (its size, its audio twin), looked up once for the ⋯ menu. */
+  private onServer: { path: string; found: Promise<OnServer | null> } | null = null;
+  private onServerNow: OnServer | null = null;
+  /** Over the picture: when the controls go while it plays untouched. */
+  private idleTimer = 0;
   private searchBarEl: HTMLElement | null = null;
   // The media being played: `this.file` itself, or — when a subtitle was
   // opened — whatever MediaLocator found for it, possibly outside the vault.
@@ -110,6 +127,13 @@ export class MediaTranscriptView extends FileView {
     });
     resized.observe(this.contentEl);
     this.register(() => resized.disconnect());
+    // Left or put aside, this view gives back Obsidian's bar.
+    this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.paintImmersive()));
+    this.register(() => {
+      window.clearTimeout(this.idleTimer);
+      document.body.removeClass('mt-immersive');
+      this.containerEl.removeClass('mt-overlay-leaf');
+    });
   }
 
   private showsVideo(): boolean {
@@ -350,6 +374,9 @@ export class MediaTranscriptView extends FileView {
       await this.buildTranscriptPanel(transcriptSide);
     }
     if (this.pendingSeek) this.seekTo(this.pendingSeek.time, this.pendingSeek.play);
+    // Its size on the server, for the ⋯ menu's "download to this device".
+    const path = this.libraryPath();
+    if (path) void this.lookUpOnServer(path).then(found => { this.onServerNow = found; });
   }
 
   /**
@@ -414,14 +441,68 @@ export class MediaTranscriptView extends FileView {
     if (chosen === 'side' && this.contentEl.clientWidth < SIDE_MIN_WIDTH_PORTRAIT) next = 'stack';
     else if (chosen !== 'auto') next = chosen;
     else {
-      const video = this.mediaEl instanceof HTMLVideoElement ? this.mediaEl : null;
-      const aspect = video && video.videoHeight ? video.videoWidth / video.videoHeight : 16 / 9;
+      const aspect = this.videoAspect();
       const current = root.hasClass('is-side') ? 'side' : root.hasClass('is-stack') ? 'stack' : undefined;
       next = pickArrangement(this.contentEl.clientWidth, this.contentEl.clientHeight, aspect, current);
     }
     root.toggleClass('is-auto', chosen === 'auto');
     root.toggleClass('is-side', next === 'side');
     root.toggleClass('is-stack', next === 'stack');
+
+    // Beside and low (a phone on its side): the picture takes its side whole,
+    // as wide as its shape asks, the controls and the name over it.
+    const side = root.querySelector('.mt-player-side');
+    if (!(side instanceof HTMLElement)) return;
+    const overlay = next === 'side' && this.contentEl.clientHeight < OVERLAY_MAX_HEIGHT;
+    root.toggleClass('is-overlay', overlay);
+    // Obsidian's header (the sidebar button, ⋮) takes the top of a short screen: gone meanwhile.
+    this.containerEl.toggleClass('mt-overlay-leaf', overlay);
+    if (overlay) {
+      const width = Math.min(this.contentEl.clientWidth - 320, Math.round(side.clientHeight * this.videoAspect()));
+      side.setCssProps({ '--mt-player-width': `${width}px`, '--mt-overlay-lift': `${this.navbarOverlap(side)}px` });
+    } else {
+      side.setCssProps({ '--mt-player-width': `${this.plugin.settings.playerWidthPercent ?? 75}%` });
+    }
+    this.wakeControls();
+  }
+
+  private videoAspect(): number {
+    const video = this.mediaEl instanceof HTMLVideoElement ? this.mediaEl : null;
+    return video && video.videoHeight ? video.videoWidth / video.videoHeight : 16 / 9;
+  }
+
+  /** How far Obsidian's floating bar on a phone reaches up over the picture. */
+  private navbarOverlap(side: HTMLElement): number {
+    const nav = document.querySelector('.mobile-navbar');
+    if (!(nav instanceof HTMLElement) || !nav.isShown()) return 0;
+    const n = nav.getBoundingClientRect();
+    const s = side.getBoundingClientRect();
+    if (n.right <= s.left || n.left >= s.right) return 0;
+    return Math.max(0, Math.round(s.bottom - n.top));
+  }
+
+  /** The controls back over the picture; while it plays, gone again after a while untouched. */
+  private wakeControls() {
+    const root = this.contentEl.querySelector('.mt-root');
+    window.clearTimeout(this.idleTimer);
+    if (!(root instanceof HTMLElement)) return this.paintImmersive();
+    root.removeClass('is-idle');
+    const video = this.mediaEl;
+    if (root.hasClass('is-overlay') && video && !video.paused) {
+      this.idleTimer = window.setTimeout(() => {
+        if (!video.paused && root.hasClass('is-overlay')) root.addClass('is-idle');
+        this.paintImmersive();
+      }, IDLE_MS);
+    }
+    this.paintImmersive();
+  }
+
+  /** The picture alone: Obsidian's bar goes with the controls, only while this view is the one in front. */
+  private paintImmersive() {
+    const idle = !!this.contentEl.querySelector('.mt-root.is-overlay.is-idle');
+    const front = this.app.workspace.getActiveViewOfType(MediaTranscriptView) === this;
+    if (front) document.body.toggleClass('mt-immersive', idle);
+    else if (idle || !this.contentEl.isShown()) document.body.removeClass('mt-immersive');
   }
 
   /** Apply the transcript font size (px) to this open view. */
@@ -468,8 +549,17 @@ export class MediaTranscriptView extends FileView {
     }, { once: true });
     // Its shape known, a portrait video may fit beside the transcript after all.
     video.addEventListener('loadedmetadata', () => this.applyVideoLayout());
-    video.addEventListener('click', () => { if (video.paused) void video.play().catch(() => {}); else video.pause(); });
-    this.controls = renderControls(wrapper.createDiv('mt-video-controls'), video, { video });
+    video.addEventListener('click', () => {
+      // Over the picture, a first tap brings the controls back; the next one plays or pauses.
+      if (this.contentEl.querySelector('.mt-root.is-overlay.is-idle')) return this.wakeControls();
+      if (video.paused) void video.play().catch(() => {});
+      else video.pause();
+    });
+    video.addEventListener('play', () => this.wakeControls());
+    video.addEventListener('pause', () => this.wakeControls());
+    const controlsEl = wrapper.createDiv('mt-video-controls');
+    controlsEl.addEventListener('pointerdown', () => this.wakeControls());
+    this.controls = renderControls(controlsEl, video, { video });
     const head = container.createDiv('mt-video-head');
     this.buildHead(head, media.title ?? media.basename, whereFrom(media));
     this.buildOrigin(head, media);
@@ -709,8 +799,9 @@ export class MediaTranscriptView extends FileView {
     chip.toggleClass('is-single', this.subtitleTracks.length < 2);
   }
 
-  /** The rest: audio only, a link to this moment, following what is said, export. */
+  /** The rest: the playlist, this device's copy, audio only, a link to this moment, following what is said, export. */
   private fillMoreMenu(menu: Menu) {
+    if (this.fillLibraryItems(menu)) menu.addSeparator();
     if (this.isVideo) {
       const audioOnly = this.plugin.settings.videoAudioOnly;
       menu.addItem(i => i.setTitle(audioOnly ? t('core.showVideo') : t('core.listenOnly')).setIcon(audioOnly ? 'film' : 'headphones')
@@ -748,6 +839,83 @@ export class MediaTranscriptView extends FileView {
       }));
     menu.addSeparator();
     menu.addItem(i => i.setTitle(t('core.exportMd')).setIcon('download').onClick(() => { void this.exportAsMarkdown(); }));
+  }
+
+  /** Where the library has this media: the server's copy, or this vault's (kept there too). */
+  private libraryPath(): string | null {
+    const media = this.media;
+    const lib = this.plugin.library;
+    if (!media || !lib.configured) return null;
+    if (media.file) return `${lib.folder}/${media.file.path}`;
+    const prefix = lib.libraryUrl('');
+    for (const url of [media.location, media.src]) {
+      if (url.startsWith(prefix)) return url.slice(prefix.length).split('/').map(decodeURIComponent).join('/');
+    }
+    return null;
+  }
+
+  private lookUpOnServer(path: string): Promise<OnServer | null> {
+    if (this.onServer?.path !== path) {
+      const found = this.plugin.library.index().then(index => {
+        const sizes = new Map(index.map(e => [e.path, e.size]));
+        if (!sizes.has(path)) return null;
+        const twin = /\.(mp4|mov|mkv|webm|m4v|avi)$/i.test(path) ? path.replace(/\.[^.]+$/, '.m4a') : null;
+        const listen = twin && sizes.has(twin) ? twin : null;
+        return { path, size: sizes.get(path) ?? 0, listen, listenSize: listen ? sizes.get(listen) ?? 0 : 0 };
+      }).catch(() => null);
+      this.onServer = { path, found };
+    }
+    return this.onServer.found;
+  }
+
+  /** Add to the playlist, keep on this device: as in the library, for the media this view plays. */
+  private fillLibraryItems(menu: Menu): boolean {
+    const path = this.libraryPath();
+    if (!path) return false;
+    const known = this.onServerNow?.path === path ? this.onServerNow : null;
+    const { playlist, cache } = this.plugin;
+    const entry = (): QueueEntry => {
+      const key = known?.listen ?? path;
+      return {
+        path,
+        key,
+        size: (known?.listen ? known.listenSize : known?.size) ?? 0,
+        title: this.media?.title ?? (this.file ? subtitleBaseName(this.file.name) : this.media?.basename ?? path),
+        subtitle: this.media ? whereFrom(this.media) : '',
+        transcript: this.file?.path ?? null,
+      };
+    };
+    if (playlist.has(path)) {
+      menu.addItem(i => i.setTitle(t('library.playlistRemove')).setIcon('list-x').onClick(() => playlist.remove(path)));
+    } else {
+      menu.addItem(i => i.setTitle(t('library.menuAddToPlaylist')).setIcon('list-plus').onClick(() => {
+        playlist.add(entry(), 'end');
+        new Notice(t('library.menuAddToPlaylist') + ' ✓');
+      }));
+      menu.addItem(i => i.setTitle(t('library.menuPlayNext')).setIcon('list-start').onClick(() => playlist.add(entry(), 'next')));
+    }
+    // This device's copy: of what plays here, the picture or (listening only) its sound.
+    if (cache.available && !this.media?.file && known) {
+      const listening = this.plugin.settings.videoAudioOnly && !!known.listen;
+      const kept = listening && known.listen ? known.listen : path;
+      const size = listening ? known.listenSize : known.size;
+      const fetchable = { path: kept, url: this.plugin.library.libraryUrl(kept), size };
+      const progress = cache.progress(kept);
+      if (cache.complete(kept)) {
+        menu.addItem(i => i.setTitle(t('library.cacheRemove')).setIcon('trash-2').onClick(() => { void cache.remove(kept); }));
+      } else if (progress && cache.entry(kept)?.kind === 'kept') {
+        const percent = progress.size ? Math.floor((progress.have / progress.size) * 100) : 0;
+        menu.addItem(i => i.setTitle(`${t('library.cacheDownloading', { percent })} · ${t('library.cacheCancel')}`).setIcon('x')
+          .onClick(() => { void cache.remove(kept); }));
+      } else {
+        menu.addItem(i => i.setTitle(size ? t('library.cacheDownloadSized', { size: formatSize(size) }) : t('library.cacheDownload'))
+          .setIcon('download').onClick(() => {
+            cache.keep(fetchable);
+            new Notice(t('library.cacheDownload') + ' …');
+          }));
+      }
+    }
+    return true;
   }
 
   private toggleSearch(open = !this.searchBarEl?.hasClass('is-open')) {

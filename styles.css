@@ -3410,3 +3410,67 @@ button.mo-ctl-play { color: var(--mt-accent-contrast, var(--text-on-accent)); }
 .is-mobile .mo-lib-play svg { width: 11px; height: 11px; }
 .is-mobile .mo-lib .mo-lib-media-row.is-playing button.mo-lib-play { background: var(--interactive-accent); color: var(--text-on-accent); }
 .is-mobile .mo-lib-bar .search-input-container input { height: auto; }
+
+/* ── Beside and low (a phone on its side): the picture fills its side, the
+   controls and the name lie over it and go while it plays untouched, and
+   Obsidian's bar with them ── */
+.mt-root.is-overlay .mt-divider { display: none; }
+.mt-root.is-overlay .mt-player-side {
+  position: relative;
+  min-width: 0;
+  background: #000;
+  overflow: hidden;
+  border: none;
+}
+.mt-root.is-overlay .mt-player-wrapper { position: static; height: 100%; padding: 0; background: #000; }
+.mt-root.is-overlay video.mt-media { width: 100%; height: 100%; max-height: none; border-radius: 0; }
+.mt-root.is-overlay .mt-video-controls,
+.mt-root.is-overlay .mt-video-head {
+  position: absolute;
+  z-index: 2;
+  left: 0;
+  right: 0;
+  transition: opacity 0.25s;
+}
+.mt-root.is-overlay .mt-video-controls {
+  bottom: var(--mt-overlay-lift, 0px);
+  padding: 24px 10px 6px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
+}
+.mt-root.is-overlay .mt-video-head {
+  top: 0;
+  padding: 8px 12px 24px;
+  background: linear-gradient(rgba(0, 0, 0, 0.65), transparent);
+  pointer-events: none;
+}
+.mt-root.is-overlay .mt-head-cover,
+.mt-root.is-overlay .mt-head-sub,
+.mt-root.is-overlay .mt-origin,
+.mt-root.is-overlay .mo-ctl-skip { display: none; }
+.mt-root.is-overlay .mt-head-title {
+  color: #fff;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mt-root.is-overlay .mo-ctl { gap: 6px; }
+.mt-root.is-overlay .mo-ctl-play { width: 36px; height: 36px; }
+.mt-root.is-overlay .mo-ctl-time { color: rgba(255, 255, 255, 0.9); font-size: 12px; }
+.mt-root.is-overlay .mo-ctl-bar::before { background: rgba(255, 255, 255, 0.3); }
+.mt-root.is-overlay .mo-ctl-buffered { background: rgba(255, 255, 255, 0.35); }
+.mt-root.is-overlay .mt-video-controls .mo-icon-btn { color: #fff; }
+.mt-root.is-overlay button.mo-ctl-rate { background: rgba(255, 255, 255, 0.18); color: #fff; }
+.mt-root.is-overlay.is-idle .mt-video-controls,
+.mt-root.is-overlay.is-idle .mt-video-head { opacity: 0; pointer-events: none; }
+.mt-root.is-overlay.is-idle video.mt-media { cursor: none; }
+
+.is-mobile .workspace-leaf-content.mt-overlay-leaf > .view-header { display: none; }
+.is-mobile .workspace-leaf-content.mt-overlay-leaf { --view-top-spacing: var(--safe-area-inset-top, 0px); }
+.is-mobile .workspace-leaf-content.mt-overlay-leaf > .view-content.mt-phone { padding-bottom: 0; }
+
+body.mt-immersive .mobile-navbar {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s;
+}
