@@ -1,11 +1,11 @@
 export type Arrangement = 'side' | 'stack';
 
 /** Below this the transcript beside a video would be too narrow to read. */
-export const SIDE_MIN_WIDTH = 720;
+export const SIDE_MIN_WIDTH = 640;
 /** A portrait video is narrow: it fits beside the transcript in less. */
 export const SIDE_MIN_WIDTH_PORTRAIT = 560;
 /** Steps taken back from a choice before it turns, so a pane dragged at the edge does not flicker. */
-const SLACK_PX = 40;
+const SLACK_PX = 24;
 const SLACK_RATIO = 0.1;
 
 /**

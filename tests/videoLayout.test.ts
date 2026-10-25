@@ -11,16 +11,21 @@ describe('pickArrangement', () => {
     expect(pickArrangement(800, 770, WIDE)).toBe('side');
   });
 
+  it('a phone turned on its side goes beside', () => {
+    expect(pickArrangement(752, 268, 1.54, 'stack')).toBe('side');
+    expect(pickArrangement(360, 700, 1.54, 'side')).toBe('stack');
+  });
+
   it('a portrait video fits beside in less', () => {
     expect(pickArrangement(620, 800, 9 / 16)).toBe('side');
     expect(pickArrangement(620, 900, WIDE)).toBe('stack');
   });
 
   it('holds its choice near the edge, so a pane being dragged does not flicker', () => {
-    expect(pickArrangement(700, 500, WIDE, 'side')).toBe('side');
-    expect(pickArrangement(740, 500, WIDE, 'stack')).toBe('stack');
-    expect(pickArrangement(770, 500, WIDE, 'stack')).toBe('side');
-    expect(pickArrangement(670, 500, WIDE, 'side')).toBe('stack');
+    expect(pickArrangement(630, 500, WIDE, 'side')).toBe('side');
+    expect(pickArrangement(650, 500, WIDE, 'stack')).toBe('stack');
+    expect(pickArrangement(680, 500, WIDE, 'stack')).toBe('side');
+    expect(pickArrangement(610, 500, WIDE, 'side')).toBe('stack');
     expect(pickArrangement(1000, 1050, WIDE, 'side')).toBe('side');
     expect(pickArrangement(1000, 1050, WIDE, 'stack')).toBe('stack');
   });
