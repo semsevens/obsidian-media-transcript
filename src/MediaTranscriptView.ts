@@ -9,9 +9,10 @@ import {
 import { subtitleBaseName } from './utils/mediaMatch';
 import { trackMarker } from './utils/transcriptSource';
 import type { ResolvedMedia } from './mediaLocator';
+import type { VideoLayout } from './settings';
 import { parseSubtitle, SubtitleSegment, formatTime } from './utils/subtitleParser';
 import { parseTimeFragment, timeFragment } from './utils/timeFragment';
-import { t } from './i18n';
+import { t, type TextKey } from './i18n';
 import { renderBar, renderCover } from './library/PlayerBar';
 import { iconButton, renderControls } from './ui/controls';
 import { whereFrom } from './ui/whereFrom';
@@ -317,7 +318,7 @@ export class MediaTranscriptView extends FileView {
       transcriptSide = reused ?? this.contentEl.createDiv('mt-transcript-side');
       if (reused) this.contentEl.appendChild(reused);
     } else if (showVideo) {
-      const root = this.contentEl.createDiv('mt-root');
+      const root = this.contentEl.createDiv(`mt-root is-${this.plugin.settings.videoLayout ?? 'auto'}`);
       const playerSide = root.createDiv('mt-player-side');
       const pct = this.plugin.settings.playerWidthPercent ?? 75;
       playerSide.setCssProps({ '--mt-player-width': `${pct}%` });
@@ -391,6 +392,14 @@ export class MediaTranscriptView extends FileView {
     if (playerSide instanceof HTMLElement) {
       playerSide.setCssProps({ '--mt-player-width': `${pct}%` });
     }
+  }
+
+  /** Lay the open video out again: beside, above, or by the pane's width. */
+  applyVideoLayout() {
+    const root = this.contentEl.querySelector('.mt-root');
+    if (!(root instanceof HTMLElement)) return;
+    root.removeClass('is-auto', 'is-side', 'is-stack');
+    root.addClass(`is-${this.plugin.settings.videoLayout ?? 'auto'}`);
   }
 
   /** Apply the transcript font size (px) to this open view. */
@@ -677,6 +686,23 @@ export class MediaTranscriptView extends FileView {
       const audioOnly = this.plugin.settings.videoAudioOnly;
       menu.addItem(i => i.setTitle(audioOnly ? t('core.showVideo') : t('core.listenOnly')).setIcon(audioOnly ? 'film' : 'headphones')
         .onClick(() => { void this.toggleAudioOnly(); }));
+      if (!audioOnly) {
+        const layouts: Array<[VideoLayout, TextKey, string]> = [
+          ['auto', 'core.videoLayoutAuto', 'layout-template'],
+          ['side', 'core.videoLayoutSide', 'columns-2'],
+          ['stack', 'core.videoLayoutStack', 'rows-2'],
+        ];
+        menu.addSeparator();
+        for (const [layout, label, icon] of layouts) {
+          menu.addItem(i => i.setTitle(t(label)).setIcon(icon).setChecked((this.plugin.settings.videoLayout ?? 'auto') === layout)
+            .onClick(() => {
+              this.plugin.settings.videoLayout = layout;
+              void this.plugin.saveSettings();
+              this.applyVideoLayout();
+            }));
+        }
+      }
+      menu.addSeparator();
     }
     const el = this.mediaEl;
     if (el) {

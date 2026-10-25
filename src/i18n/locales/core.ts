@@ -110,6 +110,11 @@ const en = {
     'only when no server has it or none answers. Useful when local copies live in iCloud and ' +
     'would have to download before playing.',
   'core.headingLayout': 'Layout',
+  'core.settingVideoLayout': 'Video layout',
+  'core.settingVideoLayoutDesc': 'Where the video goes: beside the transcript, above it, or beside it unless the pane is narrower than 720 px.',
+  'core.videoLayoutAuto': 'Layout: by pane width',
+  'core.videoLayoutSide': 'Layout: video beside the transcript',
+  'core.videoLayoutStack': 'Layout: video above the transcript',
   'core.settingVideoWidth': 'Video pane width',
   'core.settingVideoWidthDesc': 'How much horizontal space the video takes in video mode (the rest goes to the transcript). ' +
     '75% ≈ 3:1, 67% ≈ 2:1, 50% = 1:1. Dragging the divider updates this too. Audio mode is always full-width.',
@@ -255,6 +260,11 @@ const zh: Partial<Record<keyof typeof en, string>> = {
   'core.settingPreferRemoteDesc': '先在上述服务器上查找媒体，再查找库和媒体文件夹；只有在没有服务器存有该文件或都无响应时，' +
     '才使用库中的副本。适用于本地副本存放在 iCloud、播放前需要先下载的情况。',
   'core.headingLayout': '布局',
+  'core.settingVideoLayout': '视频布局',
+  'core.settingVideoLayoutDesc': '视频放在转录稿的左边还是上面；自动：窗格宽于 720px 时左右，否则上下。',
+  'core.videoLayoutAuto': '布局：按窗格宽度自动',
+  'core.videoLayoutSide': '布局：左右（视频在左）',
+  'core.videoLayoutStack': '布局：上下（视频在上）',
   'core.settingVideoWidth': '视频窗格宽度',
   'core.settingVideoWidthDesc': '视频模式下视频所占的水平空间（其余留给转录稿）。' +
     '75% ≈ 3:1，67% ≈ 2:1，50% = 1:1。拖动分隔条也会更新此值。音频模式始终为全宽。',

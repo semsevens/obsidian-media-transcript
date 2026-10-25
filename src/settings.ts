@@ -53,6 +53,7 @@ export interface MediaTranscriptSettings {
   supportedAudioExtensions: string[];
 
   // ── Layout ───────────────────────────────────────────────────────────────
+  videoLayout: VideoLayout; // video: picture beside the transcript, above it, or by the pane's width
   playerWidthPercent: number; // video: left player width (%), remembered after dragging the divider
   transcriptFontSize: number; // transcript text size in px (A−/A+ buttons update this too)
 
@@ -64,6 +65,8 @@ export interface MediaTranscriptSettings {
   // What plays next, in order: synced, so a phone goes on with a list made on the computer.
   playlist: QueueEntry[];
 }
+
+export type VideoLayout = 'auto' | 'side' | 'stack';
 
 export const DEFAULT_SETTINGS: MediaTranscriptSettings = {
   serverUrl: '',
@@ -78,6 +81,7 @@ export const DEFAULT_SETTINGS: MediaTranscriptSettings = {
   mediaLinks: {},
   supportedVideoExtensions: ['mp4', 'webm', 'mkv', 'mov', 'avi', 'm4v'],
   supportedAudioExtensions: ['mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac', 'opus'],
+  videoLayout: 'auto',
   playerWidthPercent: 75,
   transcriptFontSize: 15,
   autoScroll: true,
@@ -173,6 +177,24 @@ export class MediaTranscriptSettingTab extends PluginSettingTab {
 
     // ── Layout ──────────────────────────────────────────────────────────────
     new Setting(containerEl).setName(t('core.headingLayout')).setHeading();
+
+    new Setting(containerEl)
+      .setName(t('core.settingVideoLayout'))
+      .setDesc(t('core.settingVideoLayoutDesc'))
+      .addDropdown(d =>
+        d
+          .addOption('auto', t('core.videoLayoutAuto'))
+          .addOption('side', t('core.videoLayoutSide'))
+          .addOption('stack', t('core.videoLayoutStack'))
+          .setValue(this.plugin.settings.videoLayout)
+          .onChange(async v => {
+            this.plugin.settings.videoLayout = v as VideoLayout;
+            await this.plugin.saveSettings();
+            for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_MEDIA_TRANSCRIPT)) {
+              if (leaf.view instanceof MediaTranscriptView) leaf.view.applyVideoLayout();
+            }
+          }),
+      );
 
     new Setting(containerEl)
       .setName(t('core.settingVideoWidth'))
