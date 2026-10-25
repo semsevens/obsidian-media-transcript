@@ -3247,6 +3247,12 @@ body.mo-fab-lifted .view-actions.mod-raised .view-action {
   padding: 8px 12px;
 }
 
+/* Under the black of the picture, the name keeps the light of the controls. */
+.mt-phone .mt-video-head {
+  background: var(--background-secondary);
+  padding: 2px 14px 12px;
+}
+
 .mt-phone .mt-audio-bar { padding: 12px 14px 10px; }
 .mt-phone .mt-toolbar .mo-icon-btn { min-width: 36px; height: 36px; }
 .mt-phone .mt-search-input.mt-search-input { font-size: 15px; height: 38px; }

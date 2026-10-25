@@ -34,6 +34,8 @@ function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+const CLEAR_PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
 export class MediaTranscriptView extends FileView {
   plugin: MediaTranscriptPlugin;
 
@@ -456,9 +458,14 @@ export class MediaTranscriptView extends FileView {
     const wrapper = container.createDiv('mt-player-wrapper');
     const video = wrapper.createEl('video', {
       cls: 'mt-media',
-      attr: { src: resourcePath, playsinline: '' },
+      // A clear poster: a phone's WebView draws its own grey play sign over a picture not yet shown.
+      attr: { src: resourcePath, playsinline: '', preload: 'metadata', poster: CLEAR_PIXEL },
     });
     this.mediaEl = video;
+    // The first picture shown before it plays (a phone shows none until asked to seek).
+    video.addEventListener('loadedmetadata', () => {
+      window.setTimeout(() => { if (video.paused && video.currentTime === 0) video.currentTime = 0.01; }, 0);
+    }, { once: true });
     // Its shape known, a portrait video may fit beside the transcript after all.
     video.addEventListener('loadedmetadata', () => this.applyVideoLayout());
     video.addEventListener('click', () => { if (video.paused) void video.play().catch(() => {}); else video.pause(); });
