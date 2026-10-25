@@ -10,6 +10,7 @@ import { subtitleBaseName } from './utils/mediaMatch';
 import { trackMarker } from './utils/transcriptSource';
 import type { ResolvedMedia } from './mediaLocator';
 import type { VideoLayout } from './settings';
+import { pickArrangement, SIDE_MIN_WIDTH_PORTRAIT, type Arrangement } from './ui/videoLayout';
 import { parseSubtitle, SubtitleSegment, formatTime } from './utils/subtitleParser';
 import { parseTimeFragment, timeFragment } from './utils/timeFragment';
 import { t, type TextKey } from './i18n';
@@ -101,6 +102,12 @@ export class MediaTranscriptView extends FileView {
       if (this.followed && this.showsVideo() && this.contentEl.isShown()) void this.rebuildPlayer();
     }));
     this.register(() => this.unfollow());
+    // "Auto": beside or above, again whenever the pane changes shape.
+    const resized = new ResizeObserver(() => {
+      if (this.contentEl.querySelector('.mt-root.is-auto')) this.applyVideoLayout();
+    });
+    resized.observe(this.contentEl);
+    this.register(() => resized.disconnect());
   }
 
   private showsVideo(): boolean {
@@ -318,7 +325,7 @@ export class MediaTranscriptView extends FileView {
       transcriptSide = reused ?? this.contentEl.createDiv('mt-transcript-side');
       if (reused) this.contentEl.appendChild(reused);
     } else if (showVideo) {
-      const root = this.contentEl.createDiv(`mt-root is-${this.plugin.settings.videoLayout ?? 'auto'}`);
+      const root = this.contentEl.createDiv('mt-root');
       const playerSide = root.createDiv('mt-player-side');
       const pct = this.plugin.settings.playerWidthPercent ?? 75;
       playerSide.setCssProps({ '--mt-player-width': `${pct}%` });
@@ -326,6 +333,7 @@ export class MediaTranscriptView extends FileView {
       transcriptSide = reused ?? root.createDiv('mt-transcript-side');
       if (reused) root.appendChild(reused);
       this.buildVideoPlayer(playerSide, media);
+      this.applyVideoLayout();
       if (takeOver && playing) this.takeOver(playing);
     } else {
       this.contentEl.addClass('mt-audio-mode');
@@ -398,8 +406,20 @@ export class MediaTranscriptView extends FileView {
   applyVideoLayout() {
     const root = this.contentEl.querySelector('.mt-root');
     if (!(root instanceof HTMLElement)) return;
-    root.removeClass('is-auto', 'is-side', 'is-stack');
-    root.addClass(`is-${this.plugin.settings.videoLayout ?? 'auto'}`);
+    const chosen = this.plugin.settings.videoLayout ?? 'auto';
+    let next: Arrangement;
+    // Beside, chosen on a computer and synced, would leave a phone no room to read.
+    if (chosen === 'side' && this.contentEl.clientWidth < SIDE_MIN_WIDTH_PORTRAIT) next = 'stack';
+    else if (chosen !== 'auto') next = chosen;
+    else {
+      const video = this.mediaEl instanceof HTMLVideoElement ? this.mediaEl : null;
+      const aspect = video && video.videoHeight ? video.videoWidth / video.videoHeight : 16 / 9;
+      const current = root.hasClass('is-side') ? 'side' : root.hasClass('is-stack') ? 'stack' : undefined;
+      next = pickArrangement(this.contentEl.clientWidth, this.contentEl.clientHeight, aspect, current);
+    }
+    root.toggleClass('is-auto', chosen === 'auto');
+    root.toggleClass('is-side', next === 'side');
+    root.toggleClass('is-stack', next === 'stack');
   }
 
   /** Apply the transcript font size (px) to this open view. */
@@ -439,6 +459,8 @@ export class MediaTranscriptView extends FileView {
       attr: { src: resourcePath, playsinline: '' },
     });
     this.mediaEl = video;
+    // Its shape known, a portrait video may fit beside the transcript after all.
+    video.addEventListener('loadedmetadata', () => this.applyVideoLayout());
     video.addEventListener('click', () => { if (video.paused) void video.play().catch(() => {}); else video.pause(); });
     this.controls = renderControls(wrapper.createDiv('mt-video-controls'), video, { video });
     const head = container.createDiv('mt-video-head');

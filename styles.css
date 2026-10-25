@@ -81,8 +81,8 @@ video.mt-media {
   padding: 8px 12px 12px;
 }
 
-/* The picture on top, the transcript below: chosen in the settings, or on
-   its own when the pane is narrow ("auto"). */
+/* The picture on top, the transcript below: chosen in the settings, or by
+   the pane's shape ("auto", decided in pickArrangement). */
 .mt-root.is-stack { flex-direction: column; }
 .mt-root.is-stack .mt-divider { display: none; }
 .mt-root.is-stack .mt-player-side {
@@ -93,19 +93,6 @@ video.mt-media {
 }
 .mt-root.is-stack video.mt-media { max-height: 42vh; }
 .mt-root.is-stack .mt-transcript-side { flex: 1; min-height: 0; }
-
-@container mt-pane (max-width: 720px) {
-  .mt-root.is-auto { flex-direction: column; }
-  .mt-root.is-auto .mt-divider { display: none; }
-  .mt-root.is-auto .mt-player-side {
-    width: 100%;
-    max-width: none;
-    min-width: 0;
-    border-bottom: 1px solid var(--background-modifier-border);
-  }
-  .mt-root.is-auto video.mt-media { max-height: 42vh; }
-  .mt-root.is-auto .mt-transcript-side { flex: 1; min-height: 0; }
-}
 
 /* ── Controls of our own (transcript view, cards) ─────────────────── */
 
