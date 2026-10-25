@@ -110,6 +110,7 @@ const en = {
     'only when no server has it or none answers. Useful when local copies live in iCloud and ' +
     'would have to download before playing.',
   'core.headingLayout': 'Layout',
+  'core.dragToResize': 'Drag to resize; double-tap for the size the layout gives',
   'core.settingVideoLayout': 'Video layout',
   'core.settingVideoLayoutDesc': 'Where the video goes: beside the transcript, above it, or chosen by the pane as it changes (beside when it is wide, above when it is narrow or tall).',
   'core.videoLayoutAuto': 'Layout: smart (by the pane)',
@@ -260,6 +261,7 @@ const zh: Partial<Record<keyof typeof en, string>> = {
   'core.settingPreferRemoteDesc': '先在上述服务器上查找媒体，再查找库和媒体文件夹；只有在没有服务器存有该文件或都无响应时，' +
     '才使用库中的副本。适用于本地副本存放在 iCloud、播放前需要先下载的情况。',
   'core.headingLayout': '布局',
+  'core.dragToResize': '拖动调整大小；双击恢复自动大小',
   'core.settingVideoLayout': '视频布局',
   'core.settingVideoLayoutDesc': '视频放在转录稿的左边还是上面；智能：随窗格大小变化自动切换，宽时左右，窄或竖长时上下。',
   'core.videoLayoutAuto': '布局：智能（随窗格变化）',

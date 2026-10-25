@@ -55,6 +55,8 @@ export interface MediaTranscriptSettings {
   // ── Layout ───────────────────────────────────────────────────────────────
   videoLayout: VideoLayout; // video: picture beside the transcript, above it, or by the pane's width
   playerWidthPercent: number; // video: left player width (%), remembered after dragging the divider
+  lowSideWidthPercent: number | null; // the same on a low pane (a phone on its side); null: as wide as the video's shape asks
+  stackVideoPercent: number | null;   // video above: its height (% of the pane); null: the default
   transcriptFontSize: number; // transcript text size in px (A−/A+ buttons update this too)
 
   // ── Playback ─────────────────────────────────────────────────────────────
@@ -83,6 +85,8 @@ export const DEFAULT_SETTINGS: MediaTranscriptSettings = {
   supportedAudioExtensions: ['mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac', 'opus'],
   videoLayout: 'auto',
   playerWidthPercent: 75,
+  lowSideWidthPercent: null,
+  stackVideoPercent: null,
   transcriptFontSize: 15,
   autoScroll: true,
   videoAudioOnly: false,

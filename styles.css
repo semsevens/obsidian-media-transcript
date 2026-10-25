@@ -40,19 +40,48 @@
 }
 
 .mt-divider {
+  position: relative;
   flex: 0 0 5px;
   cursor: col-resize;
   background: var(--background-modifier-border);
   transition: background 0.12s;
+  touch-action: none;
+  z-index: 3;
+}
+
+/* A finger needs more than five pixels to take hold of. */
+.mt-divider::after {
+  content: '';
+  position: absolute;
+  inset: 0 -10px;
+}
+
+/* A grip in the middle says it can be dragged. */
+.mt-divider-grip {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 32px;
+  border-radius: 2px;
+  transform: translate(-50%, -50%);
+  background: var(--text-faint);
+  pointer-events: none;
 }
 
 .mt-divider:hover,
-body.mt-resizing .mt-divider {
+body.mt-resizing .mt-divider,
+body.mt-resizing-rows .mt-divider {
   background: var(--mt-accent);
 }
 
 body.mt-resizing {
   cursor: col-resize;
+  user-select: none;
+}
+
+body.mt-resizing-rows {
+  cursor: row-resize;
   user-select: none;
 }
 
@@ -71,6 +100,8 @@ body.mt-resizing {
 }
 
 video.mt-media {
+  /* The clear poster would make it square until the first picture: its own shape instead. */
+  aspect-ratio: var(--mt-video-aspect, 16 / 9);
   height: auto;
   max-height: 72vh;
   object-fit: contain;
@@ -84,12 +115,14 @@ video.mt-media {
 /* The picture on top, the transcript below: chosen in the settings, or by
    the pane's shape ("auto", decided in pickArrangement). */
 .mt-root.is-stack { flex-direction: column; }
-.mt-root.is-stack .mt-divider { display: none; }
+.mt-root.is-stack .mt-divider { flex: 0 0 6px; cursor: row-resize; }
+.mt-root.is-stack .mt-divider::after { inset: -10px 0; }
+.mt-root.is-stack .mt-divider-grip { width: 32px; height: 4px; }
+.mt-root.is-stack.has-video-height video.mt-media { height: var(--mt-stack-video-h); max-height: none; }
 .mt-root.is-stack .mt-player-side {
   width: 100%;
   max-width: none;
   min-width: 0;
-  border-bottom: 1px solid var(--background-modifier-border);
 }
 .mt-root.is-stack video.mt-media { max-height: 42vh; }
 .mt-root.is-stack .mt-transcript-side { flex: 1; min-height: 0; }
@@ -3414,7 +3447,7 @@ button.mo-ctl-play { color: var(--mt-accent-contrast, var(--text-on-accent)); }
 /* ── Beside and low (a phone on its side): the picture fills its side, the
    controls and the name lie over it and go while it plays untouched, and
    Obsidian's bar with them ── */
-.mt-root.is-overlay .mt-divider { display: none; }
+.mt-root.is-overlay .mt-divider { flex-basis: 6px; }
 .mt-root.is-overlay .mt-player-side {
   position: relative;
   min-width: 0;
@@ -3474,3 +3507,10 @@ body.mt-immersive .mobile-navbar {
   pointer-events: none;
   transition: opacity 0.25s;
 }
+
+/* Above, on a phone: the picture as wide as the screen, held to a share of
+   the height until dragged otherwise. */
+.mt-root.is-stack.is-overlay .mt-player-side { flex: 0 0 auto; }
+.mt-root.is-stack.is-overlay .mt-player-wrapper { height: auto; }
+.mt-root.is-stack.is-overlay video.mt-media { height: auto; max-height: 40vh; aspect-ratio: var(--mt-video-aspect, 16 / 9); }
+.mt-root.is-stack.is-overlay.has-video-height video.mt-media { height: var(--mt-stack-video-h); max-height: none; }

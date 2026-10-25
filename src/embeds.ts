@@ -9,6 +9,7 @@ import { t } from './i18n';
 import { renderCover } from './library/PlayerBar';
 import { renderControls } from './ui/controls';
 import { whereFrom } from './ui/whereFrom';
+import type { ResolvedMedia } from './mediaLocator';
 
 // Embeds have their own registry (extension → component factory), separate
 // from the view registry. Undocumented; every access is guarded so a change
@@ -39,6 +40,9 @@ const MISSING_EMBED = '.internal-embed.mod-empty-attachment[src]';
  * media folders, remote URLs), and the Transcript button opens the full view
  * beside the note, carrying the playback position over.
  */
+/** Looking for a card's media longer than this, it offers to look again. */
+const SLOW_LOOKUP_MS = 15000;
+
 export class TranscriptCards {
   private players = new Set<HTMLMediaElement>();
   /** Each card's player: how to look for its media again. */
@@ -46,6 +50,8 @@ export class TranscriptCards {
   private observers: MutationObserver[] = [];
   private docs: Document[] = [];
   private registered: string[] = [];
+  /** Which load of the plugin drew a card: one left by an earlier load (since updated or reloaded) is drawn again. */
+  private readonly generation = String(Date.now());
 
   constructor(readonly plugin: MediaTranscriptPlugin) {}
 
@@ -126,6 +132,7 @@ export class TranscriptCards {
   }
 
   private scan(root: HTMLElement) {
+    this.redrawStale(root);
     const hosts = root.matches(MISSING_EMBED) ? [root] : [];
     hosts.push(...Array.from(root.querySelectorAll<HTMLElement>(MISSING_EMBED)));
     for (const host of hosts) {
@@ -137,6 +144,26 @@ export class TranscriptCards {
       host.empty();
       host.addClass('mt-card-host');
       void this.render(host, transcript, parseTimeFragment(subpath));
+    }
+  }
+
+  /**
+   * Cards an earlier load of the plugin drew stay on the page when it is
+   * reloaded (an update), but nothing of theirs works any more: one still
+   * looking for its media would say so for ever. Drawn again by this one.
+   */
+  private redrawStale(root: HTMLElement) {
+    const cards = root.matches('.mt-card') ? [root] : [];
+    cards.push(...Array.from(root.querySelectorAll<HTMLElement>('.mt-card')));
+    for (const card of cards) {
+      if (card.dataset.mtGeneration === this.generation) continue;
+      const host = card.parentElement;
+      card.remove();
+      if (!host || host.matches(MISSING_EMBED)) continue; // the scan below draws these
+      // `![[talk.vibevoice-4bit.json]]`: the transcript is what the embed links to.
+      const { path, subpath } = parseLinktext(host.getAttribute('src') ?? '');
+      const file = this.plugin.app.metadataCache.getFirstLinkpathDest(path, '');
+      if (file) void this.render(host, file, parseTimeFragment(subpath));
     }
   }
 
@@ -174,6 +201,7 @@ export class TranscriptCards {
 
   async render(host: HTMLElement, transcript: TFile, startAt: number | null) {
     const card = host.createDiv('mt-card');
+    card.dataset.mtGeneration = this.generation;
     // Live Preview treats a press inside an embed as "edit the source", and
     // a missing-file embed would offer to create the file. Keep both out.
     card.addEventListener('mousedown', e => e.stopPropagation());
@@ -220,10 +248,8 @@ export class TranscriptCards {
     const load = async () => {
       body.empty();
       const status = body.createSpan({ cls: 'mt-card-status', text: t('core.lookingForMedia') });
-      const { media } = await this.plugin.mediaLocator.resolveForSubtitle(transcript);
-      if (!card.isConnected) return;
-      if (!media) {
-        status.setText(t('core.noMediaTranscriptOnly'));
+      const offerRetry = (text: string) => {
+        status.setText(text);
         const retry = status.createEl('a', { cls: 'mt-card-retry', text: t('core.retry'), attr: { href: '#' } });
         retry.addEventListener('click', e => {
           e.preventDefault();
@@ -231,6 +257,20 @@ export class TranscriptCards {
           this.plugin.mediaLocator.invalidate(); // forget "unreachable" too
           void load();
         });
+      };
+      // Still looking after a while (a server that does not answer): a way out, while it goes on.
+      const slow = window.setTimeout(() => offerRetry(t('core.lookingForMedia')), SLOW_LOOKUP_MS);
+      let media: ResolvedMedia | null = null;
+      try {
+        media = (await this.plugin.mediaLocator.resolveForSubtitle(transcript)).media;
+      } catch {
+        media = null;
+      } finally {
+        window.clearTimeout(slow);
+      }
+      if (!card.isConnected) return;
+      if (!media) {
+        offerRetry(t('core.noMediaTranscriptOnly'));
         return;
       }
       status.remove();

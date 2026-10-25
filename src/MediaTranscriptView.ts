@@ -46,6 +46,8 @@ interface OnServer {
 /** Beside and lower than this, the controls lie over the picture. */
 const OVERLAY_MAX_HEIGHT = 480;
 const IDLE_MS = 3000;
+/** Beside the video, the transcript keeps at least this much width. */
+const TRANSCRIPT_MIN_PX = 320;
 const CLEAR_PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
 export class MediaTranscriptView extends FileView {
@@ -453,17 +455,30 @@ export class MediaTranscriptView extends FileView {
     // as wide as its shape asks, the controls and the name over it.
     const side = root.querySelector('.mt-player-side');
     if (!(side instanceof HTMLElement)) return;
-    const overlay = next === 'side' && this.contentEl.clientHeight < OVERLAY_MAX_HEIGHT;
+    // On a phone, upright too: every line the controls and the name do not take is the transcript's.
+    const overlay = (next === 'side' && this.contentEl.clientHeight < OVERLAY_MAX_HEIGHT)
+      || (next === 'stack' && this.contentEl.hasClass('mt-phone'));
     root.toggleClass('is-overlay', overlay);
     // Obsidian's header (the sidebar button, ⋮) takes the top of a short screen: gone meanwhile.
     this.containerEl.toggleClass('mt-overlay-leaf', overlay);
-    if (overlay) {
-      const width = Math.min(this.contentEl.clientWidth - 320, Math.round(side.clientHeight * this.videoAspect()));
-      side.setCssProps({ '--mt-player-width': `${width}px`, '--mt-overlay-lift': `${this.navbarOverlap(side)}px` });
-    } else {
-      side.setCssProps({ '--mt-player-width': `${this.plugin.settings.playerWidthPercent ?? 75}%` });
-    }
+    side.setCssProps({ '--mt-player-width': this.playerWidth(overlay) });
+    if (overlay) side.setCssProps({ '--mt-overlay-lift': `${this.navbarOverlap(side)}px` });
+    // Above: the picture as high as dragged to, or as the stylesheet has it.
+    const high = this.plugin.settings.stackVideoPercent;
+    root.toggleClass('has-video-height', next === 'stack' && high !== null);
+    if (high !== null) root.setCssProps({ '--mt-stack-video-h': `${Math.round((high / 100) * this.contentEl.clientHeight)}px` });
     this.wakeControls();
+  }
+
+  /** Beside: as wide as dragged to; on a low pane, as the video's shape asks until dragged. */
+  private playerWidth(overlay: boolean): string {
+    const { settings } = this.plugin;
+    if (!overlay) return `${settings.playerWidthPercent ?? 75}%`;
+    const width = this.contentEl.clientWidth;
+    const wanted = settings.lowSideWidthPercent !== null && settings.lowSideWidthPercent !== undefined
+      ? (settings.lowSideWidthPercent / 100) * width
+      : (this.contentEl.querySelector('.mt-player-side')?.clientHeight ?? 0) * this.videoAspect();
+    return `${Math.round(Math.max(160, Math.min(width - TRANSCRIPT_MIN_PX, wanted)))}px`;
   }
 
   private videoAspect(): number {
@@ -547,8 +562,11 @@ export class MediaTranscriptView extends FileView {
     video.addEventListener('loadedmetadata', () => {
       window.setTimeout(() => { if (video.paused && video.currentTime === 0) video.currentTime = 0.01; }, 0);
     }, { once: true });
-    // Its shape known, a portrait video may fit beside the transcript after all.
-    video.addEventListener('loadedmetadata', () => this.applyVideoLayout());
+    // Its shape known (the clear poster would say square): the box takes it, and a portrait video may fit beside the transcript after all.
+    video.addEventListener('loadedmetadata', () => {
+      if (video.videoWidth && video.videoHeight) video.setCssProps({ '--mt-video-aspect': `${video.videoWidth} / ${video.videoHeight}` });
+      this.applyVideoLayout();
+    });
     video.addEventListener('click', () => {
       // Over the picture, a first tap brings the controls back; the next one plays or pauses.
       if (this.contentEl.querySelector('.mt-root.is-overlay.is-idle')) return this.wakeControls();
@@ -671,38 +689,85 @@ export class MediaTranscriptView extends FileView {
     names.createDiv({ cls: 'mt-head-sub', text: from });
   }
 
-  // Draggable divider between the video player and the transcript.
+  /**
+   * The line between the video and the transcript, dragged with a mouse or a
+   * finger: beside, how wide the video is; above, how high. Each is kept (a
+   * low pane apart, a phone on its side being another matter than a
+   * computer's window); a double tap gives the size back to the layout.
+   */
   private buildDivider(root: HTMLElement, playerSide: HTMLElement) {
-    const divider = root.createDiv('mt-divider');
-    let dragging = false;
-    let pending = -1;
+    const divider = root.createDiv({ cls: 'mt-divider', attr: { role: 'separator', 'aria-label': t('core.dragToResize') } });
+    divider.createDiv('mt-divider-grip');
+    const { settings } = this.plugin;
+    let drag: { x: number; y: number; width: number; height: number; stack: boolean; overlay: boolean } | null = null;
+    let kept: (() => void) | null = null;
+    let lastUp = 0;
 
-    const onMove = (e: MouseEvent) => {
-      if (!dragging) return;
-      const rect = root.getBoundingClientRect();
-      let pct = ((e.clientX - rect.left) / rect.width) * 100;
-      pct = Math.max(20, Math.min(75, pct));
-      pending = pct;
-      playerSide.setCssProps({ '--mt-player-width': `${pct}%` });
-    };
-    const onUp = () => {
-      if (!dragging) return;
-      dragging = false;
-      document.body.removeClass('mt-resizing');
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-      if (pending >= 0) {
-        this.plugin.settings.playerWidthPercent = Math.round(pending);
-        void this.plugin.saveSettings();
-      }
-    };
-    divider.addEventListener('mousedown', (e: MouseEvent) => {
+    divider.addEventListener('pointerdown', (e: PointerEvent) => {
       e.preventDefault();
-      dragging = true;
-      document.body.addClass('mt-resizing');
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
+      e.stopPropagation();
+      try {
+        divider.setPointerCapture(e.pointerId);
+      } catch {
+        // a pointer already gone: the drag ends with it
+      }
+      const video = this.mediaEl instanceof HTMLVideoElement ? this.mediaEl : null;
+      drag = {
+        x: e.clientX, y: e.clientY,
+        width: playerSide.getBoundingClientRect().width,
+        height: video?.getBoundingClientRect().height ?? 0,
+        stack: root.hasClass('is-stack'),
+        overlay: root.hasClass('is-overlay'),
+      };
+      document.body.addClass(drag.stack ? 'mt-resizing-rows' : 'mt-resizing');
     });
+    divider.addEventListener('pointermove', (e: PointerEvent) => {
+      if (!drag) return;
+      // A tap's jitter is not a drag (a double tap gives the size back).
+      if (!kept && Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) < 4) return;
+      const pane = this.contentEl.getBoundingClientRect();
+      if (drag.stack) {
+        const px = Math.max(80, Math.min(pane.height * 0.7, drag.height + e.clientY - drag.y));
+        root.addClass('has-video-height');
+        root.setCssProps({ '--mt-stack-video-h': `${Math.round(px)}px` });
+        const pct = Math.round((px / pane.height) * 100);
+        kept = () => { settings.stackVideoPercent = pct; };
+      } else {
+        const px = Math.max(160, Math.min(pane.width - TRANSCRIPT_MIN_PX, drag.width + e.clientX - drag.x));
+        playerSide.setCssProps({ '--mt-player-width': `${Math.round(px)}px` });
+        const pct = Math.round((px / pane.width) * 100);
+        const overlay = drag.overlay;
+        kept = () => {
+          if (overlay) settings.lowSideWidthPercent = pct;
+          else settings.playerWidthPercent = pct;
+        };
+      }
+    });
+    const letGo = () => {
+      if (!drag) return;
+      const was = drag;
+      drag = null;
+      document.body.removeClass('mt-resizing', 'mt-resizing-rows');
+      if (kept) {
+        kept();
+        kept = null;
+        void this.plugin.saveSettings();
+        this.applyVideoLayout();
+        return;
+      }
+      // Not moved: a second tap soon after gives the size back.
+      const now = Date.now();
+      if (now - lastUp < 400) {
+        if (was.stack) settings.stackVideoPercent = null;
+        else if (was.overlay) settings.lowSideWidthPercent = null;
+        else settings.playerWidthPercent = 75;
+        void this.plugin.saveSettings();
+        this.applyVideoLayout();
+        lastUp = 0;
+      } else lastUp = now;
+    };
+    divider.addEventListener('pointerup', letGo);
+    divider.addEventListener('pointercancel', letGo);
   }
 
   // ─── Transcript panel ─────────────────────────────────────────────────────
