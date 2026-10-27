@@ -23,6 +23,8 @@ const KEPT_MAX = 500;
 export class QuoteBlocks {
   private lines = new Map<string, { mtime: number; segments: SubtitleSegment[] }>();
   private playing: { audio: HTMLAudioElement; done: () => void } | null = null;
+  /** The quote whose media is being looked for, before it plays. */
+  private loading: HTMLElement | null = null;
   /** Quotes drawn, to look at again when their transcript changes. */
   private shown = new Set<{ callout: HTMLElement; transcript: TFile; check: () => Promise<void> }>();
 
@@ -139,20 +141,26 @@ export class QuoteBlocks {
       return;
     }
     this.stopPlaying();
+    // Still looking for it from the last press: one player, not two.
+    if (this.loading === callout) return;
+    this.loading = callout;
     setIcon(button, 'loader');
-    let media: ResolvedMedia | null;
-    try {
-      media = (await this.plugin.mediaLocator.resolveForSubtitle(transcript)).media;
-    } catch {
-      media = null;
-    }
-    if (!media) {
+    const find = async (): Promise<ResolvedMedia | null> => {
+      try {
+        const media = (await this.plugin.mediaLocator.resolveForSubtitle(transcript)).media;
+        // Only the sound is wanted: a video's audio twin starts sooner.
+        return media ? media.audioTwin ?? media : null;
+      } catch {
+        return null;
+      }
+    };
+    const played = await find();
+    this.loading = null;
+    if (!played) {
       setIcon(button, 'play');
       new Notice(t('core.noMediaTranscriptOnly'));
       return;
     }
-    // Only the sound is wanted: a video's audio twin starts sooner.
-    const played = media.audioTwin ?? media;
     // On the page, so starting it pauses anything else playing (the library's player).
     const audio = callout.createEl('audio', { cls: 'mt-quote-audio', attr: { preload: 'auto' } });
     const show = () => {
@@ -161,12 +169,33 @@ export class QuoteBlocks {
       time.setText(`${formatTime(Math.max(0, audio.currentTime - start))} / ${formatTime(end - start)}`);
     };
     const done = () => {
+      if (this.playing?.audio === audio) this.playing = null;
       audio.pause();
       audio.removeAttribute('src');
       audio.remove();
       setIcon(button, 'play');
       time.setText('');
-      if (this.playing?.audio === audio) this.playing = null;
+    };
+    // Where to load it from, in turn: this device's copy, the server's; and
+    // failing both, looked for afresh — a copy found a moment ago can be gone
+    // (cleared, or the plugin reloaded since), a server can wake.
+    const sources = [played.src];
+    if (/^https?:/.test(played.location) && played.location !== played.src) sources.push(played.location);
+    let lookedAgain = false;
+    const next = async () => {
+      let src = sources.shift();
+      if (!src && !lookedAgain) {
+        lookedAgain = true;
+        this.plugin.mediaLocator.invalidate();
+        src = (await find())?.src;
+      }
+      if (this.playing?.audio !== audio) return;
+      if (src) {
+        audio.src = src;
+        return;
+      }
+      done();
+      new Notice(t('core.quoteCannotPlay'));
     };
     this.playing = { audio, done };
     audio.addEventListener('play', show);
@@ -177,14 +206,15 @@ export class QuoteBlocks {
     });
     audio.addEventListener('ended', done);
     audio.addEventListener('error', () => {
-      done();
-      new Notice(t('core.quoteCannotPlay'));
+      if (this.playing?.audio !== audio) return;
+      console.warn('Media One: a quote could not load', audio.currentSrc, audio.error?.code, audio.error?.message);
+      void next();
     });
     audio.addEventListener('loadedmetadata', () => {
       audio.currentTime = start;
       void audio.play().catch(() => show());
-    }, { once: true });
-    audio.src = played.src;
+    });
+    void next();
   }
 
   private stopPlaying() {
