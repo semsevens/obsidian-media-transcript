@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseTimeFragment, timeFragment } from '../src/utils/timeFragment';
+import { parseTimeFragment, parseTimeRange, timeFragment, timeRangeFragment } from '../src/utils/timeFragment';
 
 describe('parseTimeFragment', () => {
   it('reads plain and fractional seconds', () => {
@@ -31,5 +31,27 @@ describe('timeFragment', () => {
   it('writes whole seconds that round-trip', () => {
     expect(timeFragment(83.9)).toBe('#t=83');
     expect(parseTimeFragment(timeFragment(3723))).toBe(3723);
+  });
+});
+
+describe('parseTimeRange', () => {
+  it('reads both ends', () => {
+    expect(parseTimeRange('#t=83,97')).toEqual({ start: 83, end: 97 });
+    expect(parseTimeRange('#t=1:23,1:37')).toEqual({ start: 83, end: 97 });
+  });
+  it('has no end for a plain start, or one not after it', () => {
+    expect(parseTimeRange('#t=83')).toEqual({ start: 83, end: null });
+    expect(parseTimeRange('#t=83,80')).toEqual({ start: 83, end: null });
+  });
+  it('is null without a time', () => {
+    expect(parseTimeRange('#page=2')).toBeNull();
+    expect(parseTimeRange('')).toBeNull();
+  });
+});
+
+describe('timeRangeFragment', () => {
+  it('takes the whole passage in, in whole seconds', () => {
+    expect(timeRangeFragment(83.6, 96.2)).toBe('#t=83,97');
+    expect(timeRangeFragment(5, 5)).toBe('#t=5,6');
   });
 });

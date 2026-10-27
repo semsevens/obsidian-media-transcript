@@ -56,6 +56,9 @@ export class TranscriptHost {
     document.addEventListener(TRANSCRIPT_RENDERED, onRendered);
     this.plugin.register(() => document.removeEventListener(TRANSCRIPT_RENDERED, onRendered));
 
+    // The bar over a selection belongs to the page it was made on.
+    this.plugin.registerEvent(this.app.workspace.on('active-leaf-change', () => this.popover.hide()));
+
     // Repaint when our own annotations change, not just when they rerender.
     this.plugin.register(this.store.onChange(path => this.repaintOpenPanels(path)));
 
@@ -199,18 +202,21 @@ export class TranscriptHost {
   }
 
   private async onSelectionMade(): Promise<void> {
-    const captured = this.capture();
-    if (!captured) return;
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) return;
+    const panel = this.panelOf(elementOf(selection.anchorNode))?.panel;
+    if (!panel) return;
+    // A selection across lines can't be one mark, but it can be one quote.
+    const captured = captureSelection(true);
 
     this.popover.showAt(selection.getRangeAt(0).getBoundingClientRect(), {
-      onMark: () => { void this.mark(captured.owner, captured.anchor, null); },
-      onComment: () => {
+      onMark: captured ? () => { void this.mark(captured.owner, captured.anchor, null); } : undefined,
+      onComment: captured ? () => {
         new CommentModal(this.app, captured.anchor.quote, '', body => {
           void this.mark(captured.owner, captured.anchor, body || null);
         }).open();
-      },
+      } : undefined,
+      onQuote: () => askForQuote(panel),
     });
   }
 
@@ -226,15 +232,21 @@ export class TranscriptHost {
       menu.addItem(i => i.setTitle(t('attention.menuRemoveMark')).setIcon('trash').setWarning(true)
         .onClick(() => { void this.store.remove(owner, id); }));
     } else {
-      const captured = this.capture();
-      if (!captured) return;
-      menu.addItem(i => i.setTitle(t('attention.menuMark')).setIcon('highlighter')
-        .onClick(() => { void this.mark(captured.owner, captured.anchor, null); }));
-      menu.addItem(i => i.setTitle(t('attention.menuComment')).setIcon('message-square').onClick(() => {
-        new CommentModal(this.app, captured.anchor.quote, '', body => {
-          void this.mark(captured.owner, captured.anchor, body || null);
-        }).open();
-      }));
+      const captured = captureSelection(true);
+      if (captured) {
+        menu.addItem(i => i.setTitle(t('attention.menuMark')).setIcon('highlighter')
+          .onClick(() => { void this.mark(captured.owner, captured.anchor, null); }));
+        menu.addItem(i => i.setTitle(t('attention.menuComment')).setIcon('message-square').onClick(() => {
+          new CommentModal(this.app, captured.anchor.quote, '', body => {
+            void this.mark(captured.owner, captured.anchor, body || null);
+          }).open();
+        }));
+      }
+      const panel = this.panelOf(elementOf(window.getSelection()?.anchorNode))?.panel;
+      if (panel) {
+        menu.addItem(i => i.setTitle(t('attention.menuQuote')).setIcon('quote')
+          .onClick(() => askForQuote(panel)));
+      }
     }
     menu.showAtPosition(at);
   }
@@ -304,7 +316,7 @@ function panelOf(
  * Turn the current selection in a transcript into an anchor, if it sits
  * inside one line — for a new mark, or to re-attach a lost one.
  */
-export function captureSelection(): { anchor: TranscriptAnchor; owner: string } | null {
+export function captureSelection(quiet = false): { anchor: TranscriptAnchor; owner: string } | null {
   const selection = window.getSelection();
   const selected = selection?.toString() ?? '';
   if (!selection || selected.trim().length === 0) return null;
@@ -322,7 +334,7 @@ export function captureSelection(): { anchor: TranscriptAnchor; owner: string } 
   if (at < 0) {
     // The selection runs across two lines; there is no single segment to
     // anchor it to, and splitting it silently would be worse than refusing.
-    new Notice(t('attention.noticeSingleLine'));
+    if (!quiet) new Notice(t('attention.noticeSingleLine'));
     return null;
   }
 
@@ -335,4 +347,12 @@ export function captureSelection(): { anchor: TranscriptAnchor; owner: string } 
     anchor: describeTranscript(seg, at, at + selected.length, where.trackPath),
     owner: where.owner,
   };
+}
+
+/**
+ * Have the transcript copy what is selected in it as a quote. It knows its
+ * lines' times and what the passage links to; this only asks.
+ */
+function askForQuote(panel: HTMLElement): void {
+  panel.dispatchEvent(new CustomEvent('mt:copy-quote', { bubbles: true }));
 }

@@ -3532,3 +3532,83 @@ body.mt-immersive .mobile-navbar {
 .mt-root.is-stack.is-overlay .mt-player-wrapper { height: auto; }
 .mt-root.is-stack.is-overlay video.mt-media { height: auto; max-height: 40vh; aspect-ratio: var(--mt-video-aspect, 16 / 9); }
 .mt-root.is-stack.is-overlay.has-video-height video.mt-media { height: var(--mt-stack-video-h); max-height: none; }
+
+/* A quote of a transcript in a note: play the passage, open it, and say when
+   the transcript has changed under it. */
+.callout.mt-quote > .callout-title {
+  align-items: center;
+}
+
+.mt-quote-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* In Live Preview, Obsidian's own "edit this block" button sits in the corner. */
+.markdown-source-view .mt-quote-actions {
+  margin-right: 28px;
+}
+
+.mt-quote-btn {
+  padding: 2px;
+  color: var(--callout-color, var(--text-muted));
+}
+
+.mt-quote-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.mt-quote-time {
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.mt-quote-time:empty {
+  display: none;
+}
+
+.mt-quote-audio {
+  display: none;
+}
+
+button.mt-quote-outdated {
+  height: auto;
+  padding: 1px 8px;
+  margin-left: 4px;
+  border-radius: var(--radius-s);
+  background: rgba(var(--color-orange-rgb), 0.15);
+  color: var(--color-orange);
+  font-size: var(--font-ui-smaller);
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.mt-quote-diff-label {
+  margin: 12px 0 4px;
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+
+.mt-quote-diff {
+  padding: 8px 12px;
+  border-left: 3px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  white-space: pre-wrap;
+}
+
+.mt-quote-diff-new {
+  border-left-color: var(--interactive-accent);
+}
+
+/* The passage a quote links to, followed into the transcript. */
+.mt-segment.mt-passage {
+  background: rgba(var(--color-yellow-rgb), 0.18);
+  border-radius: var(--radius-s);
+  transition: background-color 1s;
+}

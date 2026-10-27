@@ -104,6 +104,7 @@ const en = {
   // Hosts
   'attention.menuMark': 'Mark',
   'attention.menuComment': 'Comment…',
+  'attention.menuQuote': 'Copy as quote',
   'attention.menuRemoveHighlight': 'Remove highlight',
   'attention.menuMarkImage': 'Mark image',
   'attention.menuCommentImage': 'Comment on image…',
@@ -129,6 +130,7 @@ const en = {
   'attention.popCommentTitle': 'Add or edit a comment',
   'attention.popRemoveTitle': 'Remove mark',
   'attention.popZoomTitle': 'Open the picture',
+  'attention.popQuoteTitle': 'Copy as a quote for a note',
 
   // Copied details
   'attention.copyRegion': '(a region of page {page})',
@@ -245,6 +247,7 @@ const zh: Partial<Record<keyof typeof en, string>> = {
   // Hosts
   'attention.menuMark': '标注',
   'attention.menuComment': '评论…',
+  'attention.menuQuote': '复制为引用',
   'attention.menuRemoveHighlight': '移除划线',
   'attention.menuMarkImage': '标注图片',
   'attention.menuCommentImage': '评论图片…',
@@ -270,6 +273,7 @@ const zh: Partial<Record<keyof typeof en, string>> = {
   'attention.popCommentTitle': '添加或编辑评论',
   'attention.popRemoveTitle': '移除标注',
   'attention.popZoomTitle': '打开图片',
+  'attention.popQuoteTitle': '复制为引用，贴到笔记里',
 
   // Copied details
   'attention.copyRegion': '（第 {page} 页的一块区域）',

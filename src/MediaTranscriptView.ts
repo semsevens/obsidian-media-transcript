@@ -14,7 +14,8 @@ import type { QueueEntry } from './library/playlist';
 import { formatSize } from './utils/format';
 import { pickArrangement, SIDE_MIN_WIDTH_PORTRAIT, type Arrangement } from './ui/videoLayout';
 import { parseSubtitle, SubtitleSegment, formatTime } from './utils/subtitleParser';
-import { parseTimeFragment, timeFragment } from './utils/timeFragment';
+import { parseTimeFragment, timeFragment, timeRangeFragment } from './utils/timeFragment';
+import { joinParts, quoteBlock, quoteLabel } from './utils/quote';
 import { t, type TextKey } from './i18n';
 import { renderBar, renderCover } from './library/PlayerBar';
 import { iconButton, renderControls } from './ui/controls';
@@ -36,6 +37,9 @@ function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** A stretch of a transcript: from the start of its first line to the end of its last. */
+export interface Passage { start: number; end: number; text: string }
+
 interface OnServer {
   path: string;
   size: number;
@@ -46,6 +50,8 @@ interface OnServer {
 /** Beside and lower than this, the controls lie over the picture. */
 const OVERLAY_MAX_HEIGHT = 480;
 const IDLE_MS = 3000;
+/** How long a passage followed from a quote stays picked out. */
+const PASSAGE_SHOWN_MS = 6000;
 /** Beside the video, the transcript keeps at least this much width. */
 const TRANSCRIPT_MIN_PX = 320;
 const CLEAR_PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
@@ -123,6 +129,10 @@ export class MediaTranscriptView extends FileView {
       if (this.followed && this.showsVideo() && this.contentEl.isShown()) void this.rebuildPlayer();
     }));
     this.register(() => this.unfollow());
+    // "Quote" chosen over a selection in the transcript (from the selection's own bar).
+    const onQuote = () => { const p = this.selectedPassage(); if (p) this.copyQuote(p); };
+    this.contentEl.addEventListener('mt:copy-quote', onQuote);
+    this.register(() => this.contentEl.removeEventListener('mt:copy-quote', onQuote));
     // The track corrected or regenerated while on screen: read it again, where you were.
     this.registerEvent(this.app.vault.on('modify', f => {
       if (this.track && f.path === this.track.file.path) void this.reloadTrack(this.track);
@@ -249,6 +259,88 @@ export class MediaTranscriptView extends FileView {
     return this.app.fileManager.generateMarkdownLink(
       file, sourcePath, timeFragment(seconds), formatTime(seconds),
     );
+  }
+
+  // ─── Quoting ──────────────────────────────────────────────────────────────
+
+  /**
+   * A quote of `passage` for a note: a callout whose title links back to the
+   * passage's time in the transcript, and whose body is what was said.
+   * Linked to the transcript, not the media: media can leave the vault, and
+   * the transcript is what stays.
+   */
+  quoteFor(passage: Passage, sourcePath = ''): string {
+    const file = this.track?.file ?? this.media?.file ?? this.file;
+    const title = this.media?.title ?? this.media?.basename ?? (file ? subtitleBaseName(file.name) : '');
+    const label = quoteLabel(title, Math.floor(passage.start), Math.ceil(passage.end));
+    const link = file
+      ? this.app.fileManager.generateMarkdownLink(file, sourcePath, timeRangeFragment(passage.start, passage.end), label)
+      : label;
+    return quoteBlock(link, passage.text);
+  }
+
+  private copyQuote(passage: Passage) {
+    void navigator.clipboard.writeText(this.quoteFor(passage)).then(() => new Notice(t('core.quoteCopied')));
+  }
+
+  /** What is selected in the transcript, across however many lines, or null. */
+  private selectedPassage(): Passage | null {
+    const sel = activeWindow.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed || !this.transcriptEl) return null;
+    const range = sel.getRangeAt(0);
+    if (!this.transcriptEl.contains(range.commonAncestorContainer)) return null;
+    const parts: string[] = [];
+    let first = -1;
+    let last = -1;
+    this.txtEls.forEach((txt, i) => {
+      // Only the words: a selection dragged across lines takes in their
+      // timestamps and speakers too.
+      const startsIn = txt.contains(range.startContainer);
+      if (!startsIn && !range.isPointInRange(txt, 0)) return;
+      const part = txt.doc.createRange();
+      part.selectNodeContents(txt);
+      if (startsIn) part.setStart(range.startContainer, range.startOffset);
+      if (txt.contains(range.endContainer)) part.setEnd(range.endContainer, range.endOffset);
+      const text = part.toString();
+      if (!text.trim()) return;
+      parts.push(text);
+      if (first < 0) first = i;
+      last = i;
+    });
+    if (first < 0) return null;
+    return { start: this.segments[first].startTime, end: this.segments[last].endTime, text: joinParts(parts) };
+  }
+
+  /**
+   * Show the lines from `start` to `end` — a quote's passage, followed from a
+   * note — picked out for a while, the first of them in view.
+   */
+  showPassage(start: number, end: number) {
+    const show = () => {
+      const lines = this.segmentEls.filter((_, i) => {
+        const mid = (this.segments[i].startTime + this.segments[i].endTime) / 2;
+        return mid >= start && mid <= end;
+      });
+      if (lines.length === 0) return false;
+      this.transcriptEl?.querySelectorAll<HTMLElement>('.mt-passage').forEach(el => el.removeClass('mt-passage'));
+      for (const el of lines) el.addClass('mt-passage');
+      lines[0].scrollIntoView({ block: 'center' });
+      window.setTimeout(() => { for (const el of lines) el.removeClass('mt-passage'); }, PASSAGE_SHOWN_MS);
+      return true;
+    };
+    // Opened just now, its lines may not be read yet.
+    if (show()) return;
+    let tries = 20;
+    const retry = window.setInterval(() => { if (show() || --tries <= 0) window.clearInterval(retry); }, 150);
+  }
+
+  /** The line being played, as a passage to quote; null with nothing playing. */
+  currentPassage(): Passage | null {
+    const now = this.mediaEl?.currentTime;
+    if (now === undefined) return null;
+    const seg = this.segments.find(s => now >= s.startTime && now < s.endTime) ??
+      [...this.segments].reverse().find(s => s.startTime <= now);
+    return seg ? { start: seg.startTime, end: seg.endTime, text: seg.text } : null;
   }
 
   // ─── File lifecycle ───────────────────────────────────────────────────────
@@ -1311,6 +1403,14 @@ export class MediaTranscriptView extends FileView {
             .setTitle(t('core.copyTimestampLink'))
             .setIcon('link')
             .onClick(() => { void navigator.clipboard.writeText(this.timestampLink(seg.startTime)); }),
+        );
+        menu.addItem(item =>
+          item
+            .setTitle(t('core.copyQuote'))
+            .setIcon('quote')
+            .onClick(() => {
+              this.copyQuote(this.selectedPassage() ?? { start: seg.startTime, end: seg.endTime, text: seg.text });
+            }),
         );
         menu.addItem(item =>
           item

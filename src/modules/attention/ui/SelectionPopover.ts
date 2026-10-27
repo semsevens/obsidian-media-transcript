@@ -9,7 +9,9 @@ import { t } from '../../../i18n';
  */
 export interface PopoverActions {
   onMark?: () => void;
-  onComment: () => void;
+  onComment?: () => void;
+  /** Offered in a transcript: copy the selection as a quote for a note. */
+  onQuote?: () => void;
   onMarkAgain?: () => void;
   onRemove?: () => void;
   /** Offered for pictures, where clicking would otherwise have zoomed. */
@@ -39,7 +41,8 @@ export class SelectionPopover {
 
     if (actions.onMark) add(t('attention.popMark'), t('attention.popMarkTitle'), actions.onMark, 'at-pop-btn at-pop-mark');
     if (actions.onMarkAgain) add('＋', t('attention.tooltipMarkAgain'), actions.onMarkAgain);
-    add('💬', t('attention.popCommentTitle'), actions.onComment);
+    if (actions.onComment) add('💬', t('attention.popCommentTitle'), actions.onComment);
+    if (actions.onQuote) add('❝', t('attention.popQuoteTitle'), actions.onQuote);
     if (actions.onRemove) add('✕', t('attention.popRemoveTitle'), actions.onRemove);
     if (actions.onZoom) add('🔍', t('attention.popZoomTitle'), actions.onZoom);
 

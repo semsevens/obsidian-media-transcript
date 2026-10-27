@@ -2,11 +2,12 @@ import {
   App, Component, Notice, Platform, Plugin, TAbstractFile, TFile, Workspace, WorkspaceLeaf, normalizePath, parseLinktext, setIcon,
 } from 'obsidian';
 import { EmbedCreator, TranscriptCards, embedRegistry } from './embeds';
+import { QuoteBlocks } from './quoteBlocks';
 import { MediaTranscriptView, VIEW_TYPE_MEDIA_TRANSCRIPT } from './MediaTranscriptView';
 import { MediaTranscriptSettingTab, DEFAULT_SETTINGS } from './settings';
 import type { MediaTranscriptSettings } from './settings';
 import { SUBTITLE_EXTENSIONS, findSubtitleFiles, findSubtitleTracks } from './utils/subtitleFinder';
-import { parseTimeFragment } from './utils/timeFragment';
+import { parseTimeRange } from './utils/timeFragment';
 import { MediaLocator, type ResolvedMedia } from './mediaLocator';
 import { TranscriptIndex } from './transcriptIndex';
 import { LinkMediaModal } from './linkMediaModal';
@@ -65,7 +66,8 @@ export default class MediaTranscriptPlugin extends Plugin {
   private legacyPending: string[] = [];
   mediaLocator!: MediaLocator;
   transcripts!: TranscriptIndex;
-  private cards!: TranscriptCards;
+  cards!: TranscriptCards;
+  private quotes!: QuoteBlocks;
   // Core embed factories we wrapped, by extension, to put back on unload.
   private wrappedEmbeds = new Map<string, { original: EmbedCreator; wrapper: EmbedCreator }>();
 
@@ -198,6 +200,30 @@ export default class MediaTranscriptPlugin extends Plugin {
       },
     });
 
+    // Quote the line being played into the note you're writing, linked back to it.
+    this.addCommand({
+      id: 'insert-quote',
+      name: t('core.cmdInsertQuote'),
+      editorCheckCallback: (checking, editor, ctx) => {
+        const view = this.transcriptViews().find(v => v.currentPassage() !== null);
+        if (!view) return false;
+        if (!checking) {
+          const passage = view.currentPassage();
+          if (!passage) return true;
+          // A block of its own: a blank line on either side, and no more.
+          const from = editor.getCursor('from');
+          const to = editor.getCursor('to');
+          const line = editor.getLine(from.line);
+          const before = line.slice(0, from.ch).trim() ? '\n\n' : '';
+          const rest = editor.getLine(to.line).slice(to.ch);
+          const next = to.line + 1 < editor.lineCount() ? editor.getLine(to.line + 1) : '';
+          const after = rest.trim() ? '\n\n' : next.trim() ? '\n' : '';
+          editor.replaceSelection(`${before}${view.quoteFor(passage, ctx.file?.path ?? '')}${after}`);
+        }
+        return true;
+      },
+    });
+
     // When a transcript can't find its media — renamed outside Obsidian, or
     // a format with no room to say — point it at the right file by hand.
     this.addCommand({
@@ -220,6 +246,8 @@ export default class MediaTranscriptPlugin extends Plugin {
       this.transcripts.onChange(() => this.cards.refresh());
     });
     this.routeMediaLinks();
+    this.quotes = new QuoteBlocks(this);
+    this.quotes.start();
 
     this.addSettingTab(new MediaTranscriptSettingTab(this.app, this));
 
@@ -232,7 +260,8 @@ export default class MediaTranscriptPlugin extends Plugin {
    * Reuses a transcript pane that already shows this media (else any open
    * transcript pane) so repeated clicks don't pile up splits.
    */
-  async openTranscript(file: TFile, seconds: number | null = null, play = true) {
+  /** `until`: the end of a passage to show (a quote's), from `seconds` on. */
+  async openTranscript(file: TFile, seconds: number | null = null, play = true, until: number | null = null) {
     const ws = this.app.workspace;
     const leaves = ws.getLeavesOfType(VIEW_TYPE_MEDIA_TRANSCRIPT);
     let leaf = leaves.find(
@@ -249,8 +278,11 @@ export default class MediaTranscriptPlugin extends Plugin {
       await leaf.setViewState({ type: VIEW_TYPE_MEDIA_TRANSCRIPT, state: { file: file.path } });
     }
     ws.setActiveLeaf(leaf, { focus: true });
+    // A tab restored from last time, not shown since, holds a placeholder until loaded.
+    await leaf.loadIfDeferred();
     if (seconds !== null && leaf.view instanceof MediaTranscriptView) {
       leaf.view.seekTo(seconds, play);
+      if (until !== null) leaf.view.showPassage(seconds, until);
     }
   }
 
@@ -482,15 +514,16 @@ export default class MediaTranscriptPlugin extends Plugin {
       if (active && !newLeaf) {
         const { path, subpath } = parseLinktext(linktext);
         const file = this.app.metadataCache.getFirstLinkpathDest(path, sourcePath);
+        const range = parseTimeRange(subpath);
         if (file && ((this.isMedia(file) && this.hasSubtitles(file)) || this.isSubtitle(file))) {
-          await this.openTranscript(file, parseTimeFragment(subpath));
+          await this.openTranscript(file, range?.start ?? null, true, range?.end ?? null);
           return;
         }
         // Media that has left the vault: its transcript is what's still here.
         // Falling through would have Obsidian offer to create the missing file.
         const transcript = !file && this.cards.isMediaName(path) ? this.cards.transcriptFor(path) : null;
         if (transcript) {
-          await this.openTranscript(transcript, parseTimeFragment(subpath));
+          await this.openTranscript(transcript, range?.start ?? null, true, range?.end ?? null);
           return;
         }
       }

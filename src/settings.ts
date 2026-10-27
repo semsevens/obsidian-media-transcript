@@ -57,6 +57,7 @@ export interface MediaTranscriptSettings {
   playerWidthPercent: number; // video: left player width (%), remembered after dragging the divider
   lowSideWidthPercent: number | null; // the same on a low pane (a phone on its side); null: as wide as the video's shape asks
   stackVideoPercent: number | null;   // video above: its height (% of the pane); null: the default
+  quotesKept: string[];               // quotes left as written though their transcript changed (transcript#range#words)
   transcriptFontSize: number; // transcript text size in px (A−/A+ buttons update this too)
 
   // ── Playback ─────────────────────────────────────────────────────────────
@@ -87,6 +88,7 @@ export const DEFAULT_SETTINGS: MediaTranscriptSettings = {
   playerWidthPercent: 75,
   lowSideWidthPercent: null,
   stackVideoPercent: null,
+  quotesKept: [],
   transcriptFontSize: 15,
   autoScroll: true,
   videoAudioOnly: false,
