@@ -973,6 +973,24 @@ body.at-style-background .at-hl:hover {
   opacity: 1;
 }
 
+/* Above a transcript: some of its marks lost their text. A click lists them. */
+.mt-transcript > .at-lost-bar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0 0 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-s);
+  background: rgba(var(--color-red-rgb), 0.1);
+  color: var(--text-error);
+  font-size: var(--font-ui-smaller);
+  cursor: pointer;
+}
+
+.mt-transcript > .at-lost-bar:hover {
+  background: rgba(var(--color-red-rgb), 0.18);
+}
+
 /* Briefly ring an annotation the review panel jumped to. */
 @keyframes at-flash {
   from { box-shadow: 0 0 0 3px var(--text-accent); }

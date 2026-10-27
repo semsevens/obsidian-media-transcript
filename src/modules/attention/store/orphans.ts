@@ -7,6 +7,7 @@
 
 import { Annotation } from '../model';
 import { resolveMarkdown } from '../anchor/resolveAnchor';
+import { Seg, resolveTranscript } from '../anchor/transcriptAnchor';
 
 export interface Classified {
   live: Annotation[];
@@ -17,13 +18,6 @@ export interface Classified {
 /**
  * Split a file's annotations by whether they still resolve.
  *
- * Only markdown anchors are judged. A transcript anchor lives against whichever
- * subtitle track is loaded, which this doesn't have in hand — and subtitle
- * files, being generated rather than edited, rarely lose their marks anyway.
- */
-/**
- * Split a file's annotations by whether they still resolve.
- *
  * More than one version of a file can be in play — the editor's buffer and what
  * is on disk — and they disagree constantly: the buffer leads while you type,
  * and lags while a view is switching files, briefly still holding the previous
@@ -31,9 +25,8 @@ export interface Classified {
  * announces that everything in the file is gone, which is alarming and almost
  * always untrue.
  *
- * Only markdown anchors are judged. A transcript anchor lives against whichever
- * subtitle track is loaded, which this doesn't have in hand — and subtitle
- * files, being generated rather than edited, rarely lose their marks anyway.
+ * Only markdown anchors are judged here; transcript anchors are judged against
+ * their track's lines by classifyTranscript.
  */
 export function classify(annotations: readonly Annotation[], ...versions: string[]): Classified {
   const live: Annotation[] = [];
@@ -52,5 +45,29 @@ export function classify(annotations: readonly Annotation[], ...versions: string
     (usable.some(v => resolveMarkdown(v, anchor)) ? live : lost).push(a);
   }
 
+  return { live, lost };
+}
+
+/**
+ * Split a track's marks by whether they can still be found in its lines.
+ *
+ * A transcript corrected by hand can take a marked passage with it as surely
+ * as an edited note can, and a mark that quietly stops being drawn is the one
+ * outcome worse than one shown as lost. Anything other than a transcript mark
+ * passes through as live.
+ */
+export function classifyTranscript(
+  annotations: readonly Annotation[],
+  segs: readonly Seg[],
+  track: string | null,
+): Classified {
+  const live: Annotation[] = [];
+  const lost: Annotation[] = [];
+  // No lines read means we failed to read, not that every passage vanished.
+  if (segs.length === 0) return { live: [...annotations], lost };
+  for (const a of annotations) {
+    if (a.anchor.kind !== 'transcript') { live.push(a); continue; }
+    (resolveTranscript(segs, a.anchor, track) ? live : lost).push(a);
+  }
   return { live, lost };
 }

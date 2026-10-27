@@ -123,6 +123,10 @@ export class MediaTranscriptView extends FileView {
       if (this.followed && this.showsVideo() && this.contentEl.isShown()) void this.rebuildPlayer();
     }));
     this.register(() => this.unfollow());
+    // The track corrected or regenerated while on screen: read it again, where you were.
+    this.registerEvent(this.app.vault.on('modify', f => {
+      if (this.track && f.path === this.track.file.path) void this.reloadTrack(this.track);
+    }));
     // "Auto": beside or above, again whenever the pane changes shape.
     const resized = new ResizeObserver(() => {
       if (this.contentEl.querySelector('.mt-root.is-auto')) this.applyVideoLayout();
@@ -1175,6 +1179,19 @@ export class MediaTranscriptView extends FileView {
   }
 
   // ─── Track loading ────────────────────────────────────────────────────────
+
+  /** The same track again, its lines re-read, the transcript left scrolled where it was. */
+  private async reloadTrack(track: FoundSubtitleFile) {
+    const top = this.transcriptEl?.scrollTop ?? 0;
+    const grace = this.manualScrollUntil;
+    this.manualScrollUntil = Infinity;
+    try {
+      await this.loadTrack(track);
+    } finally {
+      this.manualScrollUntil = grace;
+    }
+    if (this.transcriptEl) this.transcriptEl.scrollTop = top;
+  }
 
   private async loadTrack(track: FoundSubtitleFile) {
     if (!this.transcriptEl) return;

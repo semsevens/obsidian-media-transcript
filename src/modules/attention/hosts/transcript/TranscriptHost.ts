@@ -36,6 +36,8 @@ export class TranscriptHost {
     private plugin: ModulePlugin,
     private store: AnnotationStore,
     private settings: AttentionSettings,
+    /** Opens the list of this transcript's marks, where lost ones are shown. */
+    private showLost: () => void,
   ) {
     this.popover = new SelectionPopover();
     this.bubble = new CommentBubble(settings.timeFormat);
@@ -117,22 +119,8 @@ export class TranscriptHost {
     return this.panelOf(target) != null;
   }
 
-  /**
-   * The transcript panel containing `target`, and what it is showing.
-   *
-   * Read from the DOM rather than remembered from the announcement: a plugin
-   * enabled while a transcript is already open never sees that event, and state
-   * kept only in a handler is state you can miss.
-   */
-  private panelOf(
-    target: EventTarget | null,
-  ): { panel: HTMLElement; mediaPath: string; trackPath: string; owner: string } | null {
-    const panel = asEl(asEl(target)?.closest('.mt-transcript'));
-    if (!panel) return null;
-    const mediaPath = panel.dataset.mtMedia ?? '';
-    if (!mediaPath) return null;
-    const trackPath = panel.dataset.mtTrack ?? '';
-    return { panel, mediaPath, trackPath, owner: ownerOfMarks(mediaPath, trackPath) };
+  private panelOf(target: EventTarget | null) {
+    return panelOf(target);
   }
 
   // ── Painting ───────────────────────────────────────────────────────────────
@@ -158,19 +146,40 @@ export class TranscriptHost {
     const lines = this.readSegments(panel);
     if (lines.length === 0) return;
 
-    const track = panel.dataset.mtTrack ?? null;
-    const data = await this.store.get(ownerOfMarks(mediaPath, track ?? ''));
+    const track = panel.dataset.mtTrack || null;
+    const owner = ownerOfMarks(mediaPath, track ?? '');
+    const data = await this.store.get(owner);
     const segs = lines.map(l => l.seg);
 
+    let lost = 0;
     for (const a of data.annotations) {
       if (a.anchor.kind !== 'transcript') continue;
       const hit = resolveTranscript(segs, a.anchor, track);
       // Orphans are deliberately not drawn — a guess in the wrong place is
       // worse than a mark that shows up in the panel as lost.
-      if (!hit) continue;
+      if (!hit) { lost++; continue; }
       const line = lines.find(l => l.seg.seg === hit.seg);
-      if (line) paintQuote(line.txt, a, line.seg.text.slice(hit.charStart, hit.charEnd));
+      if (!line) continue;
+      paintQuote(line.txt, a, line.seg.text.slice(hit.charStart, hit.charEnd), hit.charStart);
+      // Found somewhere other than where it was left (the transcript was
+      // corrected, or regenerated): remember where, so the next read is exact
+      // and a further edit starts from here rather than from the original.
+      if (hit.how !== 'exact') {
+        const moved = describeTranscript(line.seg, hit.charStart, hit.charEnd, track ?? a.anchor.track);
+        if (anchorMoved(a.anchor, moved)) void this.store.update(owner, a.id, { anchor: moved });
+      }
     }
+    this.paintLostBar(panel, lost);
+  }
+
+  /** Says, above the transcript, that some of its marks can't find their text. */
+  private paintLostBar(panel: HTMLElement, lost: number): void {
+    panel.querySelector(':scope > .at-lost-bar')?.remove();
+    if (lost === 0) return;
+    const bar = createDiv('at-lost-bar');
+    bar.setText(t('attention.transcriptLost', { count: lost }));
+    bar.addEventListener('click', () => this.showLost());
+    panel.prepend(bar);
   }
 
   /** `owner` is whatever the marks are filed under — the track, normally. */
@@ -185,38 +194,8 @@ export class TranscriptHost {
 
   // ── Capture ────────────────────────────────────────────────────────────────
 
-  /** Turn the current selection into an anchor, if it sits inside one line. */
   private capture(): { anchor: TranscriptAnchor; owner: string } | null {
-    const selection = window.getSelection();
-    const selected = selection?.toString() ?? '';
-    if (!selection || selected.trim().length === 0) return null;
-
-    const node = selection.anchorNode;
-    const el = elementOf(node);
-    const where = this.panelOf(el);
-    if (!where) return null;
-    const segEl = asEl(el?.closest('.mt-segment'));
-    const txt = asEl(segEl?.querySelector('.mt-txt'));
-    if (!segEl || !txt) return null;
-
-    const text = txt.innerText;
-    const at = text.indexOf(selected);
-    if (at < 0) {
-      // The selection runs across two lines; there is no single segment to
-      // anchor it to, and splitting it silently would be worse than refusing.
-      new Notice(t('attention.noticeSingleLine'));
-      return null;
-    }
-
-    const seg: Seg = {
-      seg: Number(segEl.dataset.mtSeg),
-      start: Number(segEl.dataset.mtStart),
-      text,
-    };
-    return {
-      anchor: describeTranscript(seg, at, at + selected.length, where.trackPath),
-      owner: where.owner,
-    };
+    return captureSelection();
   }
 
   private async onSelectionMade(): Promise<void> {
@@ -295,4 +274,65 @@ export class TranscriptHost {
     const { repeat, annotation } = await this.store.mark(owner, anchor, body);
     if (repeat) new Notice(t('attention.noticeMarkedTimes', { count: annotation.hits.length }));
   }
+}
+
+function anchorMoved(a: TranscriptAnchor, b: TranscriptAnchor): boolean {
+  return a.seg !== b.seg || a.start !== b.start || a.charStart !== b.charStart ||
+    a.charEnd !== b.charEnd || a.quote !== b.quote || a.prefix !== b.prefix ||
+    a.suffix !== b.suffix || a.track !== b.track;
+}
+
+/**
+ * The transcript panel containing `target`, and what it is showing.
+ *
+ * Read from the DOM rather than remembered from the announcement: a plugin
+ * enabled while a transcript is already open never sees that event, and state
+ * kept only in a handler is state you can miss.
+ */
+function panelOf(
+  target: EventTarget | null,
+): { panel: HTMLElement; mediaPath: string; trackPath: string; owner: string } | null {
+  const panel = asEl(asEl(target)?.closest('.mt-transcript'));
+  if (!panel) return null;
+  const mediaPath = panel.dataset.mtMedia ?? '';
+  if (!mediaPath) return null;
+  const trackPath = panel.dataset.mtTrack ?? '';
+  return { panel, mediaPath, trackPath, owner: ownerOfMarks(mediaPath, trackPath) };
+}
+
+/**
+ * Turn the current selection in a transcript into an anchor, if it sits
+ * inside one line — for a new mark, or to re-attach a lost one.
+ */
+export function captureSelection(): { anchor: TranscriptAnchor; owner: string } | null {
+  const selection = window.getSelection();
+  const selected = selection?.toString() ?? '';
+  if (!selection || selected.trim().length === 0) return null;
+
+  const node = selection.anchorNode;
+  const el = elementOf(node);
+  const where = panelOf(el);
+  if (!where) return null;
+  const segEl = asEl(el?.closest('.mt-segment'));
+  const txt = asEl(segEl?.querySelector('.mt-txt'));
+  if (!segEl || !txt) return null;
+
+  const text = txt.innerText;
+  const at = text.indexOf(selected);
+  if (at < 0) {
+    // The selection runs across two lines; there is no single segment to
+    // anchor it to, and splitting it silently would be worse than refusing.
+    new Notice(t('attention.noticeSingleLine'));
+    return null;
+  }
+
+  const seg: Seg = {
+    seg: Number(segEl.dataset.mtSeg),
+    start: Number(segEl.dataset.mtStart),
+    text,
+  };
+  return {
+    anchor: describeTranscript(seg, at, at + selected.length, where.trackPath),
+    owner: where.owner,
+  };
 }

@@ -4,7 +4,7 @@ import { IndexEntry, Bucket, BUCKET_ORDER } from '../store/review';
 import { Annotation, isComment, lastMarked, pdfPage } from '../model';
 import { Sort, sortLabels, sortsFor, resolveSort, sortAnnotations } from '../store/sorting';
 import { inDocumentOrder } from '../store/documentOrder';
-import { classify } from '../store/orphans';
+import { classify, classifyTranscript } from '../store/orphans';
 import { transcludedNotes } from '../store/transclusions';
 import { describe as describeAnchor } from '../anchor/textQuote';
 import { MarkdownView } from 'obsidian';
@@ -17,6 +17,8 @@ import { claimMenu, onLongPress } from '../ui/touch';
 import { describeMark } from '../store/describeMark';
 import { readable, readablePdf } from '../anchor/cjk';
 import { preferredTrack, tracksFor } from '../hosts/transcript/trackFor';
+import { segmentsFor } from '../hosts/transcript/segments';
+import { captureSelection } from '../hosts/transcript/TranscriptHost';
 import { t } from '../../../i18n';
 
 export const VIEW_TYPE_REVIEW = 'attention-review';
@@ -65,6 +67,15 @@ export class ReviewView extends ItemView {
   async onOpen() {
     this.registerEvent(this.app.workspace.on('file-open', () => { void this.render(); }));
     await this.render();
+  }
+
+  /** Switch to a lens — to this note's marks, say, to see which are lost. */
+  showLens(lens: Lens): void {
+    if (this.lens === lens && !this.resurfaced) return;
+    this.lens = lens;
+    this.sort = resolveSort(this.sort, lens);
+    this.resurfaced = null;
+    void this.render();
   }
 
   async render(): Promise<void> {
@@ -154,7 +165,8 @@ export class ReviewView extends ItemView {
     // A recording keeps its marks on the subtitle track they were read from,
     // so opening the recording has to follow that link — otherwise the marks
     // are filed correctly and visible nowhere.
-    const data = await this.plugin.store.get(trackForMedia(this.app, file.path) ?? file.path);
+    const owner = trackForMedia(this.app, file.path) ?? file.path;
+    const data = await this.plugin.store.get(owner);
     if (seq !== this.generation) return;
 
     // Read once, and use it for both ordering and deciding what's still
@@ -164,7 +176,15 @@ export class ReviewView extends ItemView {
     const onDisk = await this.diskText(file);
     if (seq !== this.generation) return;
     // Both: the buffer leads while typing and lags while a view switches files.
-    const { live, lost } = classify(data.annotations, text, onDisk);
+    const notes = classify(data.annotations, text, onDisk);
+    // A transcript's marks are judged against its lines, the way a note's are
+    // against its text: a corrected transcript can lose a passage too.
+    const lines = data.annotations.some(a => a.anchor.kind === 'transcript')
+      ? await segmentsFor(this.app, owner) : null;
+    if (seq !== this.generation) return;
+    const byLine = lines ? classifyTranscript(notes.live, lines.segs, lines.track) : null;
+    const live = byLine?.live ?? notes.live;
+    const lost = [...notes.lost, ...(byLine?.lost ?? [])];
 
     const ordered = this.sort === 'document'
       ? await inDocumentOrder(this.app, file, live, text)
@@ -173,7 +193,7 @@ export class ReviewView extends ItemView {
 
     if (ordered.length > 0) {
       root.createDiv('at-bucket-title').setText(t('attention.countInNote', { count: ordered.length }));
-      for (const a of ordered) this.renderEntry(root, a, file.path);
+      for (const a of ordered) this.renderEntry(root, a, owner);
     }
 
     // Marks whose passage was edited away. Kept, and said out loud — silently
@@ -182,7 +202,7 @@ export class ReviewView extends ItemView {
     if (lost.length > 0) {
       root.createDiv('at-bucket-title at-lost-title')
         .setText(t('attention.countLost', { count: lost.length }));
-      for (const a of lost) this.renderEntry(root, a, file.path, true);
+      for (const a of lost) this.renderEntry(root, a, owner, true);
     }
 
     // Notes transcluded into this one are on screen too, so their marks are
@@ -351,7 +371,7 @@ export class ReviewView extends ItemView {
     // Re-marking from the list: the passage came back to mind, which is worth
     // recording even when you aren't looking at it in the note.
     if (lost) {
-      act('link', t('attention.tooltipReattach'),
+      act('link', anchor.kind === 'transcript' ? t('attention.tooltipReattachTranscript') : t('attention.tooltipReattach'),
           () => { void this.reattach(targetPath, annotation); });
     } else {
       act('plus', t('attention.tooltipMarkAgain'),
@@ -422,6 +442,10 @@ export class ReviewView extends ItemView {
   }
 
   private async reattach(targetPath: string, annotation: Annotation): Promise<void> {
+    if (annotation.anchor.kind === 'transcript') {
+      await this.reattachInTranscript(targetPath, annotation);
+      return;
+    }
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!view || view.file?.path !== targetPath || view.getMode() !== 'source') {
       new Notice(t('attention.noticeReattachOpenEditor'));
@@ -439,6 +463,17 @@ export class ReviewView extends ItemView {
       anchor: { kind: 'markdown', ...describeAnchor(editor.getValue(), from, to) },
     });
     new Notice(t('attention.noticeReattached', { text: editor.getValue().slice(from, to).slice(0, 20) }));
+  }
+
+  /** The same, for a mark in a transcript: whatever is selected in its panel. */
+  private async reattachInTranscript(targetPath: string, annotation: Annotation): Promise<void> {
+    const captured = captureSelection();
+    if (!captured || captured.owner !== targetPath) {
+      new Notice(t('attention.noticeReattachTranscript'));
+      return;
+    }
+    await this.plugin.store.update(targetPath, annotation.id, { anchor: captured.anchor });
+    new Notice(t('attention.noticeReattached', { text: captured.anchor.quote.slice(0, 20) }));
   }
 
   private async markAgain(targetPath: string, annotation: Annotation): Promise<void> {

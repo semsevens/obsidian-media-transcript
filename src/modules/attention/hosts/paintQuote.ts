@@ -23,13 +23,20 @@ export function paintQuote(
   root: HTMLElement,
   annotation: Annotation,
   quote = annotation.anchor.quote,
+  /**
+   * Paint only the occurrence starting nearest this offset into `root`'s text,
+   * rather than every one: a transcript line can repeat a phrase, and the
+   * mark is on one of them.
+   */
+  near?: number,
 ): void {
   if (!quote) return;
   // The review panel renders quotes of its own; marking those would be marking
   // our own output.
   if (root.closest('.at-review')) return;
 
-  const nodes = textNodesIn(root);
+  // Offsets into the root's text count the text already painted, too.
+  const nodes = textNodesIn(root, near !== undefined);
   if (nodes.length === 0) return;
 
   // One flat string, with each node's offset into it, so a quote spanning
@@ -61,12 +68,19 @@ export function paintQuote(
     }
   };
 
+  let closest: number[] | null = null;
   for (let from = 0; ; ) {
     const at = locateRun(full, blocks, from);
     if (!at) break;
-    at.forEach((start, i) => cover(start, start + blocks[i].length));
+    if (near === undefined) at.forEach((start, i) => cover(start, start + blocks[i].length));
+    else if (!closest || Math.abs(at[0] - near) < Math.abs(closest[0] - near)) closest = at;
     from = at[at.length - 1] + blocks[blocks.length - 1].length;
   }
+  closest?.forEach((start, i) => cover(start, start + blocks[i].length));
+  // Never nest one mark in another.
+  const free = spans.filter(sp => !isInsideHighlight(sp.node));
+  spans.length = 0;
+  spans.push(...free);
 
   // Back to front: wrapping splits nodes, which would invalidate the offsets
   // of anything still to its right.
@@ -81,13 +95,13 @@ export function paintQuote(
  * phrase that is also a property value would otherwise be marked up there too,
  * in text the reader never wrote.
  */
-function textNodesIn(root: HTMLElement): Text[] {
+function textNodesIn(root: HTMLElement, withPainted = false): Text[] {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   const out: Text[] = [];
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
     const text = n as Text;
     if (text.data.length === 0) continue;
-    if (isInsideHighlight(text) || isChrome(text)) continue;
+    if ((!withPainted && isInsideHighlight(text)) || isChrome(text)) continue;
     out.push(text);
   }
   return out;

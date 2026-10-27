@@ -65,7 +65,8 @@ export default class AttentionPlugin extends ModulePlugin {
 
     if (this.settings.enableTranscriptHost) {
       // Dormant unless obsidian-media-transcript is installed and announcing.
-      this.transcriptHost = new TranscriptHost(this.app, this, this.store, this.settings);
+      this.transcriptHost = new TranscriptHost(this.app, this, this.store, this.settings,
+        () => { void this.openReview({ lens: 'file' }); });
       this.transcriptHost.register();
     }
 
@@ -340,13 +341,13 @@ export default class AttentionPlugin extends ModulePlugin {
    */
   private opening: Promise<void> | null = null;
 
-  private async openReview(opts: { focus?: boolean } = {}): Promise<void> {
+  private async openReview(opts: { focus?: boolean; lens?: 'file' } = {}): Promise<void> {
     // Opening twice concurrently would race two mounts of the same view type.
     this.opening = (this.opening ?? Promise.resolve()).then(() => this.doOpenReview(opts));
     return this.opening;
   }
 
-  private async doOpenReview({ focus = true }: { focus?: boolean } = {}): Promise<void> {
+  private async doOpenReview({ focus = true, lens }: { focus?: boolean; lens?: 'file' } = {}): Promise<void> {
     const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_REVIEW);
     const leaf: WorkspaceLeaf | null =
       existing[0] ?? this.app.workspace.getRightLeaf(false);
@@ -366,6 +367,7 @@ export default class AttentionPlugin extends ModulePlugin {
     // is not in the document. Rendering into it succeeds and shows nothing.
     await leaf.loadIfDeferred();
     await this.app.workspace.revealLeaf(leaf);
+    if (lens && leaf.view instanceof ReviewView) leaf.view.showLens(lens);
 
     if (!focus) {
       const editor = this.app.workspace.getActiveViewOfType(MarkdownView);
